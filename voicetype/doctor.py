@@ -109,6 +109,32 @@ def run_checks(
             out.append(Check("gtk4-layer-shell", True))
         except (ValueError, ImportError) as e:
             out.append(Check("gtk4-layer-shell", False, f"pacman -S gtk4-layer-shell ({e})", required=False))
+        else:
+            # the library must be loaded before libwayland, else the layer-shell global is
+            # never bound and the overlay silently never appears
+            try:
+                from .overlay import preload_layer_shell
+
+                lib = preload_layer_shell()
+                out.append(Check("layer-shell library preloaded", bool(lib), lib or "libgtk4-layer-shell.so not found", required=False))
+                import gi
+
+                gi.require_version("Gtk", "4.0")
+                gi.require_version("Gtk4LayerShell", "1.0")
+                from gi.repository import Gtk, Gtk4LayerShell
+
+                Gtk.init()
+                supported = Gtk4LayerShell.is_supported()
+                out.append(
+                    Check(
+                        "compositor supports layer-shell",
+                        supported,
+                        "compositor does not implement zwlr_layer_shell_v1" if not supported else "",
+                        required=False,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                out.append(Check("compositor supports layer-shell", False, str(e), required=False))
 
     # offline engines
     out.append(Check("vosk installed (offline STT)", has_module("vosk"), "pip install vosk", required=False))

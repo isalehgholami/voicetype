@@ -41,10 +41,40 @@ def smooth(current: float, target: float, factor: float = LEVEL_SMOOTHING) -> fl
 STATUS_TEXT = {"listening": "Listening…", "processing": "Processing…"}
 
 
+def preload_layer_shell() -> str | None:
+    """Load libgtk4-layer-shell *before* libwayland so it can bind zwlr_layer_shell_v1.
+
+    gtk4-layer-shell interposes libwayland symbols to grab the layer-shell global when the
+    display is opened. If GDK (and with it libwayland) is loaded first, the global is never
+    bound and every window fails with "Failed to initialize layer surface ... may have been
+    linked after libwayland". See gtk4-layer-shell's linking.md.
+    """
+    import ctypes
+    import ctypes.util
+
+    candidates = [
+        ctypes.util.find_library("gtk4-layer-shell"),
+        "libgtk4-layer-shell.so",
+        "/usr/lib/libgtk4-layer-shell.so",
+        "/usr/lib64/libgtk4-layer-shell.so",
+        "/usr/local/lib/libgtk4-layer-shell.so",
+    ]
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            ctypes.CDLL(cand, mode=ctypes.RTLD_GLOBAL)
+            return cand
+        except OSError:
+            continue
+    return None
+
+
 def create_overlay(cfg: OverlayConfig) -> Overlay:
     if not cfg.enabled:
         return NullOverlay()
     try:
+        preload_layer_shell()
         return GtkOverlay(cfg)
     except Exception as e:  # noqa: BLE001 - missing gi / no layer-shell support
         log.warning("GTK overlay unavailable (%s); running without overlay. Run `voicetype doctor`.", e)
@@ -57,18 +87,18 @@ class GtkOverlay:
 
         gi.require_version("Gtk", "4.0")
         gi.require_version("Gtk4LayerShell", "1.0")
-        from gi.repository import Gtk4LayerShell
 
-        if hasattr(Gtk4LayerShell, "is_supported") and not Gtk4LayerShell.is_supported():
-            raise RuntimeError("compositor does not support wlr-layer-shell")
         self.cfg = cfg
         self.view = _View()
         self._ready = threading.Event()
         self._lock = threading.Lock()
+        self._error: Exception | None = None
         self._thread = threading.Thread(target=self._run, daemon=True, name="overlay-gtk")
         self._thread.start()
         if not self._ready.wait(5):
             raise RuntimeError("GTK overlay thread did not start")
+        if self._error is not None:
+            raise self._error
 
     # ------------------------------------------------------------------ GTK thread
     def _run(self) -> None:
@@ -76,30 +106,38 @@ class GtkOverlay:
         from gi.repository import Gtk4LayerShell as LS
 
         self._GLib = GLib
-        Gtk.init()
-        win = Gtk.Window()
-        win.set_decorated(False)
-        win.set_default_size(self.cfg.width, self.cfg.height)
-        area = Gtk.DrawingArea()
-        area.set_content_width(self.cfg.width)
-        area.set_content_height(self.cfg.height)
-        area.set_draw_func(self._draw)
-        win.set_child(area)
+        try:
+            Gtk.init()
+            # the display must be open before the compositor's layer-shell global can be bound
+            if hasattr(LS, "is_supported") and not LS.is_supported():
+                raise RuntimeError("compositor does not support wlr-layer-shell")
+            win = Gtk.Window()
+            win.set_decorated(False)
+            win.set_default_size(self.cfg.width, self.cfg.height)
+            area = Gtk.DrawingArea()
+            area.set_content_width(self.cfg.width)
+            area.set_content_height(self.cfg.height)
+            area.set_draw_func(self._draw)
+            win.set_child(area)
 
-        LS.init_for_window(win)
-        LS.set_namespace(win, "voicetype")
-        LS.set_layer(win, LS.Layer.OVERLAY)
-        LS.set_keyboard_mode(win, LS.KeyboardMode.NONE)  # never takes focus
-        LS.set_exclusive_zone(win, -1)
-        c = self.cfg
-        vert = {"top": LS.Edge.TOP, "bottom": LS.Edge.BOTTOM}.get(c.position)
-        horiz = {"left": LS.Edge.LEFT, "right": LS.Edge.RIGHT}.get(c.anchor_horizontal)
-        for edge in (LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT):
-            LS.set_anchor(win, edge, edge in (vert, horiz))
-        if vert is not None:
-            LS.set_margin(win, vert, abs(c.offset_y))
-        if horiz is not None:
-            LS.set_margin(win, horiz, abs(c.offset_x))
+            LS.init_for_window(win)
+            LS.set_namespace(win, "voicetype")
+            LS.set_layer(win, LS.Layer.OVERLAY)
+            LS.set_keyboard_mode(win, LS.KeyboardMode.NONE)  # never takes focus
+            LS.set_exclusive_zone(win, -1)
+            c = self.cfg
+            vert = {"top": LS.Edge.TOP, "bottom": LS.Edge.BOTTOM}.get(c.position)
+            horiz = {"left": LS.Edge.LEFT, "right": LS.Edge.RIGHT}.get(c.anchor_horizontal)
+            for edge in (LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT):
+                LS.set_anchor(win, edge, edge in (vert, horiz))
+            if vert is not None:
+                LS.set_margin(win, vert, abs(c.offset_y))
+            if horiz is not None:
+                LS.set_margin(win, horiz, abs(c.offset_x))
+        except Exception as e:  # noqa: BLE001 - reported to the caller
+            self._error = e
+            self._ready.set()
+            return
 
         self._win, self._area, self._Gtk = win, area, Gtk
         self._timer = 0
