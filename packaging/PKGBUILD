@@ -6,7 +6,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc='Voice-to-text overlay daemon (Persian-first) for Wayland/X11'
 arch=('any')
-url='https://github.com/voicetype/voicetype'
+url='https://github.com/isalehgholami/voicetype'
 license=('MIT')
 # python-sounddevice and python-speechrecognition are AUR packages (not in the official repos):
 # an AUR helper (yay/paru) resolves them; with plain makepkg install them first.

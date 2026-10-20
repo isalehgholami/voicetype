@@ -1107,7 +1107,7 @@ yay -S voicetype-git
 
 ```bash
 # Clone the repo
-git clone https://github.com/<your-org>/voicetype.git ~/src/voicetype
+git clone https://github.com/isalehgholami/voicetype.git ~/src/voicetype
 cd ~/src/voicetype
 
 # Create a venv so we don't pollute the system Python

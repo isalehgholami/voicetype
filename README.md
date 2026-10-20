@@ -9,10 +9,10 @@ browser, Telegram, terminal, IDE, LibreOffice.
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Arch%20Linux%20%C2%B7%20KDE%20Plasma%206-1793D1?logo=archlinux&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-380_passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-385_passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-[Features](#-features) · [Quick start](#-quick-start) · [Usage](#-usage) · [Configuration](#%EF%B8%8F-configuration) · [Providers](#%EF%B8%8F-speech-providers) · [Development](#%EF%B8%8F-development) · [Troubleshooting](#-troubleshooting) · [فارسی](README.fa.md)
+[Features](#-features) · [How it works](#-how-it-works) · [Requirements](#-requirements) · [Quick start](#-quick-start) · [Usage](#-usage) · [Configuration](#%EF%B8%8F-configuration) · [Providers](#%EF%B8%8F-speech-providers) · [Development](#%EF%B8%8F-development) · [Troubleshooting](#-troubleshooting) · [Docs](#%EF%B8%8F-documentation) · [فارسی](README.fa.md)
 
 </div>
 
@@ -28,7 +28,7 @@ browser, Telegram, terminal, IDE, LibreOffice.
 - **Smart stop** — adaptive silence detection that calibrates to your room noise, or stop it yourself.
 - **Hardened** — the control socket is `0600`, transcribed text is never executed, control characters are stripped.
 - **Self-diagnosing** — `voicetype doctor` tells you what's missing and how to install it.
-- **Well tested** — 380 automated tests; the core runs without a microphone, network or GUI.
+- **Well tested** — 385 automated tests; the core runs without a microphone, network or GUI.
 
 > **Status: v0.1.** The core is unit-tested, but the parts that need a real desktop (overlay, shortcut registration, paste injection, microphone) must be verified on your machine. Run `voicetype doctor` first and see [docs/inject-matrix.md](docs/inject-matrix.md).
 
@@ -56,7 +56,7 @@ browser, Telegram, terminal, IDE, LibreOffice.
 | OS | Linux — **Arch + KDE Plasma 6 (Wayland)** is the primary target; X11 supported |
 | Python | 3.11 or newer |
 | Audio | PipeWire (or PulseAudio) and a microphone |
-| Wayland injection | `wl-clipboard`, `ydotool` (+ running `ydotoold`) |
+| Wayland injection | `wl-clipboard`, `ydotool` (+ running `ydotoold`) — or `wtype` instead of the paste route |
 | X11 injection | `xdotool`, `xclip` |
 | Overlay (optional) | `gtk4`, `gtk4-layer-shell`, `python-gobject`, `python-cairo` |
 
@@ -65,14 +65,14 @@ browser, Telegram, terminal, IDE, LibreOffice.
 ### Arch Linux
 
 ```bash
-git clone https://github.com/<your-username>/voicetype.git
+git clone https://github.com/isalehgholami/voicetype.git
 cd voicetype
 
 ./scripts/setup-arch.sh            # installs system packages, adds you to 'input' + 'audio'
 #   → log out and back in so the new groups apply
 
 ./scripts/install-user.sh          # pipx install + systemd user service + config + Super+Alt+V shortcut
-systemctl --user enable --now ydotool
+systemctl --user enable --now ydotool   # needs the ydotoold daemon; no user unit? run: sudo ydotoold &
 voicetype doctor                   # every required line should be [✓]
 ```
 
@@ -108,15 +108,15 @@ voicetype models install fa-small                     # download the Persian Vos
 ### CLI reference
 
 ```text
-voicetype run                       run the daemon in the foreground (normally via systemd)
-voicetype toggle|start|stop|cancel  control a running daemon
-voicetype status                    show state and active provider
-voicetype reload                    re-read the config without restarting
-voicetype profile [name|next|default]   list / switch config profiles
-voicetype doctor                    environment checklist with install hints
-voicetype net-test [--proxy URL]    check connectivity through the configured proxy
-voicetype config init|path|check    create / locate / validate the config file
-voicetype models list|install <fa-small|fa> [--sha256 …]
+voicetype run                                run the daemon in the foreground (normally via systemd)
+voicetype toggle|start|stop|cancel|quit      control a running daemon
+voicetype status                             show state and active provider
+voicetype reload                             re-read the config without restarting
+voicetype profile [name|next|default]        list / switch config profiles
+voicetype doctor                             environment checklist with install hints
+voicetype net-test [--proxy URL] [--url URL]  check connectivity through the configured proxy
+voicetype config init|path|check             create / locate / validate the config file
+voicetype models list|install <fa-small|fa> [--sha256 …]  download / verify a Vosk model
 ```
 
 ### Profiles
@@ -206,7 +206,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 ruff check .          # lint
-pytest                # 380 tests, no microphone / network / GUI needed
+pytest                # 385 tests, no microphone / network / GUI needed
 ```
 
 - The core (config, dispatcher, STT, post-processing, injector logic) runs on any OS; GTK, evdev and PortAudio are imported lazily.

@@ -23,19 +23,19 @@
 - امن: سوکت کنترل با مجوز `0600`، متن هرگز اجرا نمی‌شود
 - `voicetype doctor` مشکلات محیط را با دستور نصب نشان می‌دهد
 
-> ⚠️ **نسخه‌ی ۰٫۱:** هسته با ۳۸۰ تست خودکار بررسی شده، اما بخش‌هایی که به دسکتاپ واقعی نیاز دارند (پنجره، میان‌بر، paste، میکروفون) باید روی سیستم خودتان تأیید شوند. اول `voicetype doctor` را اجرا کنید.
+> ⚠️ **نسخه‌ی ۰٫۱:** هسته با ۳۸۵ تست خودکار بررسی شده، اما بخش‌هایی که به دسکتاپ واقعی نیاز دارند (پنجره، میان‌بر، paste، میکروفون) باید روی سیستم خودتان تأیید شوند. اول `voicetype doctor` را اجرا کنید.
 
 ## 🚀 نصب (Arch Linux + KDE Plasma)
 
 ```bash
-git clone https://github.com/<your-username>/voicetype.git
+git clone https://github.com/isalehgholami/voicetype.git
 cd voicetype
 
 ./scripts/setup-arch.sh            # نصب بسته‌ها + افزودن به گروه‌های input و audio
 #   ← یک بار خارج و دوباره وارد شوید
 
 ./scripts/install-user.sh          # نصب با pipx + سرویس systemd + تنظیمات + میان‌بر Super+Alt+V
-systemctl --user enable --now ydotool
+systemctl --user enable --now ydotool   # سرویس ydotoold باید اجرا باشد؛ اگر یونیت کاربری نبود: sudo ydotoold &
 voicetype doctor                   # همه‌ی موارد الزامی باید [✓] باشند
 ```
 
@@ -108,9 +108,10 @@ voicetype reload && voicetype net-test      # OK یا FAIL به‌همراه ع�
 ## 🛠️ توسعه
 
 ```bash
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ruff check .
-pytest        # ۳۸۰ تست؛ بدون میکروفون، شبکه یا GUI
+pytest        # ۳۸۵ تست؛ بدون میکروفون، شبکه یا GUI
 ```
 
 ## 📄 مجوز

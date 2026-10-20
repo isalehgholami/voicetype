@@ -9,12 +9,10 @@ Persian-first voice typing for Linux. Press a shortcut, speak, and the text appe
 ## Install (Arch Linux)
 
 ```bash
-git clone <repo> voicetype && cd voicetype
+git clone https://github.com/isalehgholami/voicetype.git && cd voicetype
 ./scripts/setup-arch.sh
-pip install --user -e .
-voicetype config init
-./scripts/install-hotkey.sh Meta+Alt+V
-systemctl --user enable --now ydotool voicetype
+./scripts/install-user.sh
+systemctl --user enable --now ydotool
 voicetype doctor
 ```
 
