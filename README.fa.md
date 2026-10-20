@@ -23,7 +23,7 @@
 - امن: سوکت کنترل با مجوز `0600`، متن هرگز اجرا نمی‌شود
 - `voicetype doctor` مشکلات محیط را با دستور نصب نشان می‌دهد
 
-> ⚠️ **نسخه‌ی ۰٫۱:** هسته با ۳۵۰ تست خودکار بررسی شده، اما بخش‌هایی که به دسکتاپ واقعی نیاز دارند (پنجره، میان‌بر، paste، میکروفون) باید روی سیستم خودتان تأیید شوند. اول `voicetype doctor` را اجرا کنید.
+> ⚠️ **نسخه‌ی ۰٫۱:** هسته با ۳۸۰ تست خودکار بررسی شده، اما بخش‌هایی که به دسکتاپ واقعی نیاز دارند (پنجره، میان‌بر، paste، میکروفون) باید روی سیستم خودتان تأیید شوند. اول `voicetype doctor` را اجرا کنید.
 
 ## 🚀 نصب (Arch Linux + KDE Plasma)
 
@@ -34,21 +34,19 @@ cd voicetype
 ./scripts/setup-arch.sh            # نصب بسته‌ها + افزودن به گروه‌های input و audio
 #   ← یک بار خارج و دوباره وارد شوید
 
-pip install --user -e .            # یا ساخت بسته: cd packaging && makepkg -si
-voicetype config init              # ساخت ~/.config/voicetype/config.toml
-./scripts/install-hotkey.sh Meta+Alt+V
-
-systemctl --user enable --now ydotool voicetype
+./scripts/install-user.sh          # نصب با pipx + سرویس systemd + تنظیمات + میان‌بر Super+Alt+V
+systemctl --user enable --now ydotool
 voicetype doctor                   # همه‌ی موارد الزامی باید [✓] باشند
 ```
+
+> روی Arch دستور `pip install --user` به‌خاطر PEP 668 خطا می‌دهد، برای همین از **pipx** استفاده شده. بسته‌ی سیستمی می‌خواهید؟ `cd packaging && makepkg -si` (پکیج‌های `python-sounddevice` و `python-speechrecognition` در AUR هستند؛ با `yay`/`paru` نصب کنید).
 
 داخل یک فیلد متن کلیک کنید، **Super + Alt + V** را بزنید، حرف بزنید و دوباره بزنید (یا ۳ ثانیه سکوت کنید).
 
 ### افزونه‌های اختیاری
 
 ```bash
-pip install --user -e ".[vosk]"       # تشخیص آفلاین
-pip install --user -e ".[whisper]"    # آفلاین و دقیق‌تر
+./scripts/install-user.sh socks,vosk,whisper,hotkey   # هرکدام را بخواهید: socks · vosk · whisper · hotkey
 voicetype models install fa-small     # مدل فارسی Vosk (حدود ۵۳ مگابایت)
 ```
 
@@ -60,6 +58,7 @@ voicetype models install fa-small     # مدل فارسی Vosk (حدود ۵۳ م
 | لغو بدون تایپ | `voicetype cancel` |
 | وضعیت دیمون | `voicetype status` |
 | عیب‌یابی | `voicetype doctor` |
+| تست اینترنت / پروکسی | `voicetype net-test` |
 | اعمال تغییر تنظیمات | `voicetype reload` |
 | پروفایل‌ها | `voicetype profile code` / `voicetype profile next` |
 
@@ -75,6 +74,21 @@ silence_threshold_seconds = 3.0
 [postprocess.custom_replacements]
 "می شود" = "می‌شود"
 ```
+
+## 🌐 اینترنت قطع یا فیلتر است؟ پروکسی بزنید
+
+همه‌ی ترافیک VoiceType (تشخیص گفتار Google و دانلود مدل‌ها) را از پروکسی HTTP یا SOCKS رد کنید:
+
+```toml
+[network]
+proxy = "socks5h://127.0.0.1:1080"     # یا  http://127.0.0.1:8080  ·  user:pass@ هم پشتیبانی می‌شود
+```
+
+```bash
+voicetype reload && voicetype net-test      # OK یا FAIL به‌همراه علت
+```
+
+برای SOCKS باید PySocks نصب باشد (`./scripts/install-user.sh socks`). اگر پروکسی کار نکند VoiceType **به‌جای اتصال مستقیم خطا می‌دهد** تا صدای شما ناخواسته مستقیم ارسال نشود. جزئیات: [docs/network.md](docs/network.md)
 
 ## 🔒 حریم خصوصی
 
@@ -96,7 +110,7 @@ silence_threshold_seconds = 3.0
 ```bash
 pip install -e ".[dev]"
 ruff check .
-pytest        # ۳۵۰ تست؛ بدون میکروفون، شبکه یا GUI
+pytest        # ۳۸۰ تست؛ بدون میکروفون، شبکه یا GUI
 ```
 
 ## 📄 مجوز

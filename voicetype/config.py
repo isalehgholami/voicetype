@@ -113,6 +113,12 @@ class PostprocessConfig:
 
 
 @dataclass(frozen=True)
+class NetworkConfig:
+    proxy: str = ""  # http://host:port | socks5h://user:pass@host:1080 ; "" = use env vars
+    no_proxy: str = "localhost,127.0.0.1,::1"
+
+
+@dataclass(frozen=True)
 class Config:
     log_level: str = "INFO"
     notify_errors: bool = True  # desktop notification (notify-send) on errors
@@ -122,6 +128,7 @@ class Config:
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     injector: InjectorConfig = field(default_factory=InjectorConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
 
 
 # ---------------------------------------------------------------- validation
@@ -221,6 +228,13 @@ def validate(cfg: Config) -> Config:
         raise _fail("stt.fallback_provider", f"must be empty or one of {', '.join(PROVIDERS)}")
     if not cfg.hotkey.combo.strip():
         raise _fail("hotkey.combo", "must not be empty")
+    if cfg.network.proxy.strip():
+        from .network import ProxyError, parse_proxy
+
+        try:
+            parse_proxy(cfg.network.proxy)
+        except ProxyError as e:
+            raise _fail("network.proxy", str(e)) from e
     return cfg
 
 
@@ -332,6 +346,10 @@ typing_delay_ms = 0
 strip_whitespace = false
 paste_shortcut = "auto"
 restore_clipboard = true
+
+[network]
+proxy = ""                 # http://host:port | socks5h://user:pass@host:1080  ("" = use HTTP(S)_PROXY env vars)
+no_proxy = "localhost,127.0.0.1,::1"
 
 [postprocess]
 capitalize_first = true

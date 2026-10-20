@@ -116,6 +116,21 @@ def run_checks(
     out.append(Check("vosk model installed", bool(models), ", ".join(models) or "voicetype models install fa-small", required=False))
     out.append(Check("faster-whisper installed", has_module("faster_whisper"), "pip install faster-whisper", required=False))
 
+    # network / proxy
+    try:
+        from .network import ProxyError, effective_proxy
+
+        spec = effective_proxy(cfg.network.proxy if cfg else "")
+        if spec is None:
+            has_env = any(os.environ.get(k) for k in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"))
+            out.append(Check("proxy", True, "from environment variables" if has_env else "none (direct)", required=False))
+        elif spec.is_socks and not has_module("socks"):
+            out.append(Check("proxy", False, f"{spec.redacted()} needs PySocks: pip install PySocks"))
+        else:
+            out.append(Check("proxy", True, f"{spec.redacted()} — test with: voicetype net-test", required=False))
+    except ProxyError as e:
+        out.append(Check("proxy", False, str(e)))
+
     # daemon
     try:
         from .control import send_command

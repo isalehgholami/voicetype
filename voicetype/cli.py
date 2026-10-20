@@ -22,6 +22,9 @@ def build_parser() -> argparse.ArgumentParser:
     prof = sub.add_parser("profile", help="list / switch profiles (~/.config/voicetype/profiles/*.toml)")
     prof.add_argument("name", nargs="?", help="profile name, 'next' to cycle, 'default' for the base config")
     sub.add_parser("doctor", help="check the environment")
+    nt = sub.add_parser("net-test", help="test connectivity through the configured proxy")
+    nt.add_argument("--url", default=None, help="URL to fetch (default: Google's generate_204 endpoint)")
+    nt.add_argument("--proxy", default=None, help="try this proxy instead of the configured one")
     cfg = sub.add_parser("config", help="configuration helpers")
     cfg.add_argument("action", choices=["init", "path", "check"])
     models = sub.add_parser("models", help="manage offline Vosk models")
@@ -58,6 +61,29 @@ def _config(action: str) -> int:
     return 0
 
 
+def _apply_network(proxy_override: str | None = None) -> None:
+    """Configure the proxy from config (CLI commands that touch the network)."""
+    from . import network
+
+    cfg = load_config()
+    network.configure(proxy_override if proxy_override is not None else cfg.network.proxy, cfg.network.no_proxy)
+
+
+def _net_test(args: argparse.Namespace) -> int:
+    from . import network
+
+    try:
+        _apply_network(args.proxy)
+        spec = network.effective_proxy(args.proxy if args.proxy is not None else load_config().network.proxy)
+    except (network.ProxyError, ConfigError) as e:
+        print(f"voicetype: {e}", file=sys.stderr)
+        return 2
+    print(f"proxy: {spec.redacted() if spec else 'none (environment variables apply)'}")
+    ok, detail = network.check_connectivity(args.url or network.CHECK_URL)
+    print(("OK   " if ok else "FAIL ") + detail)
+    return 0 if ok else 1
+
+
 def _models(args: argparse.Namespace) -> int:
     from . import models
 
@@ -69,6 +95,13 @@ def _models(args: argparse.Namespace) -> int:
         return 0
     if not args.name:
         print("usage: voicetype models install <fa-small|fa>", file=sys.stderr)
+        return 2
+    from . import network
+
+    try:
+        _apply_network()
+    except (network.ProxyError, ConfigError) as e:
+        print(f"voicetype: {e}", file=sys.stderr)
         return 2
     try:
         path = models.install(
@@ -116,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
         text, code = report(run_checks())
         print(text)
         return code
+    if args.cmd == "net-test":
+        return _net_test(args)
     if args.cmd == "config":
         return _config(args.action)
     if args.cmd == "models":

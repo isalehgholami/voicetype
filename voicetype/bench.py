@@ -109,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", help="write the markdown table to this file")
     args = ap.parse_args(argv)
 
+    try:
+        from .config import load_config
+        from .network import configure
+
+        cfg = load_config()
+        configure(cfg.network.proxy, cfg.network.no_proxy)
+    except ValueError as e:  # ConfigError / ProxyError
+        print(f"voicetype: {e}", file=sys.stderr)
+        return 2
     items = load_corpus(Path(args.folder))
     if not items:
         print(f"no wav+txt pairs in {args.folder} (record some with scripts/record_corpus.py)", file=sys.stderr)

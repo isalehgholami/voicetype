@@ -18,6 +18,7 @@ dependencies = [
 vosk = ["vosk>=0.3.45"]
 whisper = ["faster-whisper>=1.0"]
 hotkey = ["evdev>=1.6"]
+socks = ["PySocks>=1.7"]
 dev = ["pytest>=7", "ruff>=0.4", "mypy>=1.8"]
 
 [project.scripts]

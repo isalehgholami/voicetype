@@ -2,7 +2,7 @@
 # T-0.1 — آماده‌سازی ماشین هدف (Arch + Plasma 6 Wayland)
 set -euo pipefail
 
-sudo pacman -S --needed pipewire pipewire-pulse wireplumber python python-pip python-gobject python-cairo \
+sudo pacman -S --needed pipewire pipewire-pulse wireplumber python python-pip python-pipx python-gobject python-cairo \
     gtk4 gtk4-layer-shell wtype ydotool wl-clipboard xdotool xclip portaudio libnotify
 
 sudo usermod -aG input,audio "$USER"

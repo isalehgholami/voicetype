@@ -8,6 +8,8 @@ pkgdesc='Voice-to-text overlay daemon (Persian-first) for Wayland/X11'
 arch=('any')
 url='https://github.com/voicetype/voicetype'
 license=('MIT')
+# python-sounddevice and python-speechrecognition are AUR packages (not in the official repos):
+# an AUR helper (yay/paru) resolves them; with plain makepkg install them first.
 depends=('python>=3.11' 'python-sounddevice' 'python-speechrecognition' 'portaudio')
 makedepends=('git' 'python-build' 'python-installer' 'python-wheel' 'python-setuptools')
 optdepends=(
@@ -23,6 +25,7 @@ optdepends=(
     'python-cairo: overlay'
     'python-vosk: offline recognition'
     'python-evdev: hold-to-talk hotkey'
+    'python-pysocks: SOCKS proxy support'
     'python-faster-whisper: offline Whisper recognition (AUR)'
 )
 provides=("$_pkgname")
@@ -34,7 +37,13 @@ sha256sums=()
 
 pkgver() {
     cd "$startdir/.."
-    git describe --tags --long 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./' || echo "$pkgver"
+    # No tags (e.g. shallow CI checkout) → keep the static pkgver instead of printing nothing.
+    local described
+    if described="$(git describe --tags --long 2>/dev/null)" && [ -n "$described" ]; then
+        printf '%s' "$described" | sed 's/^v//;s/-/.r/;s/-/./'
+    else
+        printf '%s' "$pkgver"
+    fi
 }
 
 build() {

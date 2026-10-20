@@ -31,7 +31,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install build tools
-        run: pacman -Syu --noconfirm base-devel git python python-build python-installer python-wheel python-setuptools python-sounddevice python-speechrecognition portaudio sudo
+        run: pacman -Syu --noconfirm base-devel git python python-build python-installer python-wheel python-setuptools portaudio sudo
       - uses: actions/checkout@v4
       - name: Build package as an unprivileged user
         run: |

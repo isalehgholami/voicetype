@@ -6,7 +6,7 @@ import signal
 import threading
 from pathlib import Path
 
-from . import __version__
+from . import __version__, network
 from .audio import AudioCapture
 from .config import Config, ConfigError, ConfigManager
 from .control import ControlServer
@@ -33,6 +33,9 @@ class _BrokenInjector:
 
 
 def build_components(cfg: Config, on_fallback=None) -> Components:
+    # Proxy first: providers and model downloads must already see it. Raises ProxyError (e.g. PySocks
+    # missing) so a broken proxy never silently falls back to a direct connection.
+    network.configure(cfg.network.proxy, cfg.network.no_proxy)
     backend = build_backend(cfg, on_fallback)
     try:
         injector = TextInjector(cfg.injector)
