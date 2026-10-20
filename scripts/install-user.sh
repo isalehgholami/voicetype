@@ -13,7 +13,15 @@ if ! command -v pipx >/dev/null; then
     exit 1
 fi
 
-pipx install --force --system-site-packages ".[${EXTRAS}]"
+if pipx list 2>/dev/null | grep -q 'voicetype'; then
+    # pipx's uv backend cannot recreate an existing venv (uv creates it in $PWD instead and
+    # then aborts), so `pipx install --force` silently leaves the old code in place.
+    # Update the existing venv with pip instead. $PWD must be absolute: pipx runpip
+    # changes the working directory to the venv.
+    pipx runpip voicetype install --force-reinstall --no-deps --no-build-isolation "$PWD"
+else
+    pipx install --system-site-packages ".[${EXTRAS}]"
+fi
 
 # systemd user unit that points at the pipx binaries (%h = $HOME)
 LIB="$HOME/.local/lib/voicetype"
