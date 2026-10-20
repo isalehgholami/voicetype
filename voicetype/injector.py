@@ -196,15 +196,33 @@ class TextInjector:
         d = self._run(["wl-paste", "--no-newline", "--type", chosen])
         return (chosen, d.stdout) if d.returncode == 0 else None
 
+    def _wl_copy(self, data: bytes, mime: str = "text/plain;charset=utf-8"):
+        """Run wl-copy without piping its output.
+
+        wl-copy forks into the background and the daemon keeps the inherited
+        stdout/stderr open for as long as it serves the clipboard. Piping them
+        (capture_output=True) makes subprocess.run wait for an EOF that never
+        comes, so the call blocks until the timeout. Redirecting to /dev/null
+        lets the forked parent exit right away; the exit code is still the
+        real one (non-zero if wl-copy could not take the clipboard).
+        """
+        return self._run(
+            ["wl-copy", "--type", mime],
+            input=data,
+            capture_output=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
     def _wl_restore(self, saved: tuple[str, bytes] | None) -> None:
         if saved is None:
             return
         mime, data = saved
-        self._run(["wl-copy", "--type", mime], input=data)
+        self._wl_copy(data, mime)
 
     def _paste_wayland(self, text: str) -> None:
         saved = self._wl_save()
-        self._check(self._run(["wl-copy", "--type", "text/plain;charset=utf-8"], input=text.encode("utf-8")), "wl-copy")
+        self._check(self._wl_copy(text.encode("utf-8")), "wl-copy")
         self._sleep(0.05)  # let the compositor propagate the selection
         shortcut = self.paste_shortcut()
         keys = (

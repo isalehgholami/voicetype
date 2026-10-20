@@ -1,4 +1,6 @@
+import os
 import subprocess
+import time
 
 import pytest
 
@@ -11,16 +13,25 @@ class Recorder:
 
     def __init__(self, outputs=None):
         self.calls = []
+        self.kwargs = []
         self.outputs = outputs or {}
 
     def __call__(self, cmd, **kw):
         self.calls.append((list(cmd), kw.get("input")))
+        self.kwargs.append(kw)
         key = tuple(cmd[:2])
         rc, out = self.outputs.get(key, (0, b""))
         return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr=b"boom" if rc else b"")
 
     def cmds(self):
         return [c for c, _ in self.calls]
+
+    def kw_for(self, name):
+        """kwargs of the first call whose command starts with `name`."""
+        for cmd, kw in zip(self.cmds(), self.kwargs, strict=True):
+            if cmd[0] == name:
+                return kw
+        raise AssertionError(f"no {name} call recorded")
 
 
 WL_FULL = Tools(wl_copy=True, wl_paste=True, wtype=True, ydotool=True)
@@ -157,3 +168,46 @@ def test_release_modifiers_can_be_disabled():
     inj, run = make(InjectorConfig(release_modifiers=False, backend="wtype"))
     inj.inject("x")
     assert not any(c[:2] == ["ydotool", "key"] for c in run.cmds())
+
+
+def test_wl_copy_output_is_never_piped():
+    """wl-copy forks a daemon that keeps stdout/stderr open -> piping would block forever."""
+    inj, run = make()
+    inj.inject("x")
+    kw = run.kw_for("wl-copy")
+    assert kw.get("capture_output") is not True
+    assert kw.get("stdout") is subprocess.DEVNULL
+    assert kw.get("stderr") is subprocess.DEVNULL
+
+
+def _write_fake_tool(path, body):
+    path.write_text("#!/usr/bin/env python3\n" + body)
+    path.chmod(0o755)
+
+
+def test_wl_copy_background_daemon_does_not_block_injection(tmp_path, monkeypatch):
+    """Regression: a real wl-copy daemon holds stdout/stderr open for the whole session.
+
+    If wl-copy's output is piped, subprocess.run waits for an EOF that only comes
+    when the daemon exits, so the injection blocks until the 10s timeout.
+    """
+    # mimics wl-copy: the parent exits, the daemon keeps stdout/stderr open
+    _write_fake_tool(
+        tmp_path / "wl-copy",
+        "import os, sys, time\n"
+        "if os.fork() == 0:\n"
+        "    time.sleep(4)\n"
+        "    os._exit(0)\n"
+        "sys.stdin.buffer.read()\n"
+        "sys.exit(0)\n",
+    )
+    _write_fake_tool(tmp_path / "wl-paste", "import sys\nsys.exit(1)\n")
+    _write_fake_tool(tmp_path / "ydotool", "import sys\nsys.exit(0)\n")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    inj = TextInjector(InjectorConfig(), session="wayland", tools=WL_FULL)
+    start = time.monotonic()
+    inj.inject("hello")
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0, f"wl-copy blocked the injection for {elapsed:.1f}s"
