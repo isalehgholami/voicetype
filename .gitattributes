@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.sh text eol=lf
+packaging/wait-display text eol=lf
+*.wav binary
