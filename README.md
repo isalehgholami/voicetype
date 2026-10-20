@@ -67,6 +67,7 @@ browser, Telegram, terminal, IDE, LibreOffice.
 ```bash
 git clone https://github.com/isalehgholami/voicetype.git
 cd voicetype
+chmod +x scripts/*.sh             # safety net: zip/tar downloads can drop the exec bit
 
 ./scripts/setup-arch.sh            # installs system packages, adds you to 'input' + 'audio'
 #   → log out and back in so the new groups apply

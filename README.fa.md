@@ -30,6 +30,7 @@
 ```bash
 git clone https://github.com/isalehgholami/voicetype.git
 cd voicetype
+chmod +x scripts/*.sh             # احتیاط: دانلود به‌صورت zip/tar ممکن است مجوز اجرا را حذف کند
 
 ./scripts/setup-arch.sh            # نصب بسته‌ها + افزودن به گروه‌های input و audio
 #   ← یک بار خارج و دوباره وارد شوید
