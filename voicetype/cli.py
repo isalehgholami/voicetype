@@ -1,0 +1,132 @@
+"""Command line entry points: ``voicetype <cmd>`` and ``voicetype-toggle``."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from . import __version__
+from .config import ConfigError, default_config_path, ensure_default_config, load_config
+from .control import COMMANDS, send_command
+
+CLIENT_COMMANDS = tuple(c for c in COMMANDS if c != "profile")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="voicetype", description="Voice-to-text overlay daemon (Persian-first)")
+    p.add_argument("--version", action="version", version=f"voicetype {__version__}")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("run", help="run the daemon in the foreground")
+    for name in ("toggle", "start", "stop", "cancel", "status", "reload", "quit"):
+        sub.add_parser(name, help=f"send '{name}' to the running daemon")
+    prof = sub.add_parser("profile", help="list / switch profiles (~/.config/voicetype/profiles/*.toml)")
+    prof.add_argument("name", nargs="?", help="profile name, 'next' to cycle, 'default' for the base config")
+    sub.add_parser("doctor", help="check the environment")
+    cfg = sub.add_parser("config", help="configuration helpers")
+    cfg.add_argument("action", choices=["init", "path", "check"])
+    models = sub.add_parser("models", help="manage offline Vosk models")
+    models.add_argument("action", choices=["list", "install"])
+    models.add_argument("name", nargs="?")
+    models.add_argument("--sha256", help="expected SHA-256 of the archive")
+    return p
+
+
+def _client(cmd: str) -> int:
+    try:
+        reply = send_command(cmd)
+    except ConnectionError as e:
+        print(f"voicetype: {e}", file=sys.stderr)
+        return 3
+    print(reply)
+    return 0 if reply.startswith("ok") else 1
+
+
+def _config(action: str) -> int:
+    if action == "path":
+        print(default_config_path())
+        return 0
+    if action == "init":
+        path, created = ensure_default_config()
+        print(f"{'created' if created else 'already exists'}: {path}")
+        return 0
+    try:
+        load_config()
+    except ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+    print(f"OK: {default_config_path()}")
+    return 0
+
+
+def _models(args: argparse.Namespace) -> int:
+    from . import models
+
+    if args.action == "list":
+        have = models.installed()
+        for key, info in models.MODELS.items():
+            state = f"installed ({have[key]})" if key in have else "not installed"
+            print(f"{key:10s} ~{info.size_mb} MB  {state}")
+        return 0
+    if not args.name:
+        print("usage: voicetype models install <fa-small|fa>", file=sys.stderr)
+        return 2
+    try:
+        path = models.install(
+            args.name,
+            expected_sha256=args.sha256,
+            progress=lambda d, t: print(f"\r{d >> 20} / {t >> 20 if t else '?'} MB", end="", file=sys.stderr),
+        )
+    except models.ModelError as e:
+        print(f"\nvoicetype: {e}", file=sys.stderr)
+        return 1
+    print(f"\ninstalled: {path}\nset in config:  [stt.vosk] model_path = \"{path}\"")
+    return 0
+
+
+def _safe_streams() -> None:
+    """Never crash on a non-UTF-8 terminal (C locale, ssh): replace unencodable characters."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    _safe_streams()
+    args = build_parser().parse_args(argv)
+    if args.cmd == "run":
+        from .daemon import Daemon
+
+        try:
+            return Daemon().run()
+        except ConfigError as e:
+            print(e, file=sys.stderr)
+            return 2
+        except RuntimeError as e:  # e.g. another instance running
+            print(f"voicetype: {e}", file=sys.stderr)
+            return 1
+    if args.cmd == "profile":
+        return _client("profile" + (f" {args.name}" if args.name else ""))
+    if args.cmd in CLIENT_COMMANDS:
+        return _client(args.cmd)
+    if args.cmd == "doctor":
+        from .doctor import report, run_checks
+
+        text, code = report(run_checks())
+        print(text)
+        return code
+    if args.cmd == "config":
+        return _config(args.action)
+    if args.cmd == "models":
+        return _models(args)
+    return 2
+
+
+def toggle_main() -> None:
+    """``voicetype-toggle`` — the command bound to the KDE Custom Shortcut."""
+    sys.exit(main(["toggle"]))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,47 @@
+# Maintainer: <your name> <your email>
+# Stable AUR package. `scripts/release.sh X.Y.Z` tags the release and fills in pkgver + sha256sums.
+pkgname=voicetype
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Voice-to-text overlay daemon (Persian-first) for Wayland/X11'
+arch=('any')
+url='https://github.com/voicetype/voicetype'   # TODO: set to the real repository URL
+license=('MIT')
+depends=('python>=3.11' 'python-sounddevice' 'python-speechrecognition' 'portaudio')
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
+optdepends=(
+    'wl-clipboard: clipboard paste on Wayland (default injection)'
+    'ydotool: send the paste key on Wayland'
+    'wtype: alternative Wayland typing backend'
+    'xdotool: X11 injection'
+    'xclip: X11 clipboard paste'
+    'kdotool: detect terminals to use Ctrl+Shift+V (KDE Wayland)'
+    'gtk4: overlay'
+    'gtk4-layer-shell: overlay'
+    'python-gobject: overlay'
+    'python-cairo: overlay'
+    'python-vosk: offline recognition'
+    'python-evdev: hold-to-talk hotkey'
+    'playerctl: pause media while recording'
+    'libnotify: error notifications'
+)
+install=voicetype.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')   # replaced by scripts/release.sh (updpkgsums)
+
+build() {
+    cd "$pkgname-$pkgver"
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    python -m installer --destdir="$pkgdir" dist/*.whl
+    install -Dm755 packaging/wait-display "$pkgdir/usr/lib/voicetype/wait-display"
+    install -Dm644 packaging/voicetype.service "$pkgdir/usr/lib/systemd/user/voicetype.service"
+    install -Dm644 packaging/voicetype.desktop "$pkgdir/etc/xdg/autostart/voicetype.desktop"
+    install -Dm644 packaging/voicetype-toggle.desktop "$pkgdir/usr/share/applications/voicetype-toggle.desktop"
+    install -Dm755 scripts/install-hotkey.sh "$pkgdir/usr/share/voicetype/install-hotkey.sh"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

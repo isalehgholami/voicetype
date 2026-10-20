@@ -1,0 +1,24 @@
+[Unit]
+Description=VoiceType voice-to-text daemon
+Documentation=https://github.com/voicetype/voicetype
+# PartOf/After (not Requires): the user manager must not fail this unit if the session target restarts
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+# WAYLAND_DISPLAY / DISPLAY / XDG_RUNTIME_DIR come from the user manager's imported environment
+# (Plasma runs `dbus-update-activation-environment --systemd`; otherwise run
+# `systemctl --user import-environment WAYLAND_DISPLAY DISPLAY` from your session startup).
+ExecStartPre=/usr/lib/voicetype/wait-display
+ExecStart=/usr/bin/voicetype run
+ExecReload=/usr/bin/voicetype reload
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

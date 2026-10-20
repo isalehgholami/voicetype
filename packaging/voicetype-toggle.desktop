@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=VoiceType Toggle
+Comment=Start/stop voice dictation
+Exec=voicetype-toggle
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;
+NoDisplay=false
+StartupNotify=false
+X-KDE-GlobalAccel-CommandShortcut=true

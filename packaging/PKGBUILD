@@ -1,0 +1,55 @@
+# Maintainer: VoiceType contributors
+# Development package built from the local git checkout:  cd packaging && makepkg -si
+pkgname=voicetype-git
+_pkgname=voicetype
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Voice-to-text overlay daemon (Persian-first) for Wayland/X11'
+arch=('any')
+url='https://github.com/voicetype/voicetype'
+license=('MIT')
+depends=('python>=3.11' 'python-sounddevice' 'python-speechrecognition' 'portaudio')
+makedepends=('git' 'python-build' 'python-installer' 'python-wheel' 'python-setuptools')
+optdepends=(
+    'wl-clipboard: clipboard paste on Wayland (default injection)'
+    'ydotool: send the paste key on Wayland'
+    'wtype: alternative Wayland typing backend'
+    'xdotool: X11 injection'
+    'xclip: X11 clipboard paste'
+    'kdotool: detect terminals to use Ctrl+Shift+V (KDE Wayland)'
+    'gtk4: overlay'
+    'gtk4-layer-shell: overlay'
+    'python-gobject: overlay'
+    'python-cairo: overlay'
+    'python-vosk: offline recognition'
+    'python-evdev: hold-to-talk hotkey'
+    'python-faster-whisper: offline Whisper recognition (AUR)'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+install=voicetype.install
+# Build from the repository this PKGBUILD lives in (packaging/..).
+source=()
+sha256sums=()
+
+pkgver() {
+    cd "$startdir/.."
+    git describe --tags --long 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./' || echo "$pkgver"
+}
+
+build() {
+    cd "$startdir/.."
+    python -m build --wheel --no-isolation --outdir "$srcdir/dist"
+}
+
+package() {
+    cd "$startdir/.."
+    python -m installer --destdir="$pkgdir" "$srcdir"/dist/*.whl
+    install -Dm755 packaging/wait-display "$pkgdir/usr/lib/voicetype/wait-display"
+    install -Dm644 packaging/voicetype.service "$pkgdir/usr/lib/systemd/user/voicetype.service"
+    install -Dm644 packaging/voicetype.desktop "$pkgdir/etc/xdg/autostart/voicetype.desktop"
+    install -Dm644 packaging/voicetype-toggle.desktop "$pkgdir/usr/share/applications/voicetype-toggle.desktop"
+    install -Dm755 scripts/install-hotkey.sh "$pkgdir/usr/share/voicetype/install-hotkey.sh"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

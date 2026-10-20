@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Waits (max ~15 s) until a usable Wayland socket or X11 display exists, so the daemon
+# doesn't start before the graphical session is ready. Used as ExecStartPre= (no quoting traps
+# like inline `$VAR` inside a unit file).
+for _ in $(seq 1 60); do
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        case "$WAYLAND_DISPLAY" in
+            /*) sock="$WAYLAND_DISPLAY" ;;
+            *) sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$WAYLAND_DISPLAY" ;;
+        esac
+        [ -S "$sock" ] && exit 0
+    fi
+    [ -n "${DISPLAY:-}" ] && exit 0
+    runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    for s in "$runtime"/wayland-*; do
+        [ -S "$s" ] && exit 0
+    done
+    sleep 0.25
+done
+echo "voicetype: no usable Wayland socket or X11 DISPLAY found" >&2
+exit 1

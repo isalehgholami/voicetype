@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check voicetype tests scripts spikes
+      - name: Test
+        run: pytest
+
+  pkgbuild:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install build tools
+        run: pacman -Syu --noconfirm base-devel git python python-build python-installer python-wheel python-setuptools python-sounddevice python-speechrecognition portaudio sudo
+      - uses: actions/checkout@v4
+      - name: Build package as an unprivileged user
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          sudo -u builder bash -c "cd $GITHUB_WORKSPACE/packaging && makepkg --nodeps --noconfirm"
+          ls "$GITHUB_WORKSPACE"/packaging/*.pkg.tar.*

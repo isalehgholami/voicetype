@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=VoiceType
+Comment=Voice-to-text daemon (autostart fallback when the systemd user unit is not enabled)
+Exec=voicetype run
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;
+X-KDE-autostart-after=panel
+X-GNOME-Autostart-enabled=true
