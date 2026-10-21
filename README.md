@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Arch%20%2B%20KDE%20Plasma%206-1793D1?logo=archlinux&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-733_passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-734_passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 [Features](#features) · [How it works](#how-it-works) · [Requirements](#requirements) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Providers](#speech-providers) · [Development](#development) · [Troubleshooting](#troubleshooting) · [فارسی](README.fa.md)
@@ -26,7 +26,7 @@
 - **Adaptive stop.** Silence detection calibrates against the noise floor of the room instead of using a fixed threshold.
 - **Predictable security posture.** The control socket is created with mode `0600`, control characters are stripped from transcripts, and transcribed text is never passed to a shell or evaluated.
 - **Self-diagnosing.** `voicetype doctor` inspects the environment and prints the exact command needed to fix each missing dependency.
-- **Tested.** 733 automated tests. The core runs without a microphone, network access, or a display server.
+- **Tested.** 734 automated tests. The core runs without a microphone, network access, or a display server.
 
 > **Status: v0.1.** The core is covered by unit and integration tests, but the parts that require a real desktop session (overlay rendering, shortcut registration, paste injection, microphone capture) can only be verified on your own machine. Run `voicetype doctor` first and read [docs/inject-matrix.md](docs/inject-matrix.md) for the results recorded so far.
 
@@ -577,7 +577,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 ruff check . # lint
-pytest                # 733 tests; no microphone, network, or GUI required
+pytest                # 734 tests; no microphone, network, or GUI required
 ```
 
 The core (configuration, dispatcher, speech backends, post-processing, injector logic) runs on any operating system. GTK, `evdev`, and PortAudio are imported lazily, so the test suite needs none of them.
