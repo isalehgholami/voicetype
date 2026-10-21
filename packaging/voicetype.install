@@ -4,7 +4,7 @@ post_install() {
     echo "         sudo usermod -aG input \$USER   # then log out and in"
     echo "    2. Enable the clipboard-paste helper:  systemctl --user enable --now ydotool"
     echo "    3. Start the daemon:                   systemctl --user enable --now voicetype"
-    echo "    4. Register the shortcut:              /usr/share/voicetype/install-hotkey.sh"
+    echo "    4. Register the shortcut:              /usr/share/voicetype/install-user.sh --hotkey-only"
     echo "    5. Check everything:                   voicetype doctor"
     echo "    Privacy: the default provider 'google_free' sends audio to Google."
     echo "             For offline use: voicetype models install fa-small, then set provider = \"vosk\"."

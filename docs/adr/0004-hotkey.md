@@ -1,6 +1,6 @@
 # ADR-0004: هات‌کی سراسری
 
-**وضعیت:** پذیرفته‌شده؛ نمونه‌ها: `spikes/hotkey_evdev.py`, `scripts/install-hotkey.sh` (T-0.5)
+**وضعیت:** پذیرفته‌شده؛ نمونه‌ها: `spikes/hotkey_evdev.py`, بخش میان‌بر در `scripts/install-user.sh` (T-0.5)
 
 ## تصمیم
 1. **پیش‌فرض:** KDE Custom Shortcut → دستور `voicetype toggle` (سوکت کنترل). بدون دسترسی ویژه، روی هر نسخه‌ی Plasma.

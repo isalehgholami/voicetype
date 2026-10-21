@@ -45,7 +45,7 @@ package() {
     install -Dm644 packaging/voicetype.service "$pkgdir/usr/lib/systemd/user/voicetype.service"
     install -Dm644 packaging/voicetype.desktop "$pkgdir/etc/xdg/autostart/voicetype.desktop"
     install -Dm644 packaging/voicetype-toggle.desktop "$pkgdir/usr/share/applications/voicetype-toggle.desktop"
-    install -Dm755 scripts/install-hotkey.sh "$pkgdir/usr/share/voicetype/install-hotkey.sh"
+    install -Dm755 scripts/install-user.sh "$pkgdir/usr/share/voicetype/install-user.sh"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

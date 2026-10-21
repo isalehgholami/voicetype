@@ -5,7 +5,7 @@ Start with `voicetype doctor` — every `✗` has an install hint.
 | Symptom | Cause / fix |
 |---|---|
 | `voicetype: daemon is not running` | `systemctl --user start voicetype` · logs: `journalctl --user -u voicetype -f` |
-| Shortcut does nothing | `voicetype toggle` in a terminal works? Then re-run `scripts/install-hotkey.sh` or add the command in System Settings |
+| Shortcut does nothing | `voicetype toggle` in a terminal works? Then re-run `scripts/install-user.sh --hotkey-only` or add the command in System Settings |
 | Overlay doesn't appear | `doctor` → gtk4-layer-shell / python-gobject; GNOME has no layer-shell |
 | Text isn't typed | `doctor` → "text injection backend", "ydotoold running"; `systemctl --user enable --now ydotool` |
 | Text typed in terminals as `v` or nothing | install `kdotool` or set `[injector] paste_shortcut = "ctrl+shift+v"` |

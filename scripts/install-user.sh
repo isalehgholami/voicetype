@@ -10,7 +10,7 @@
 #   6. creates ~/.config/voicetype/config.toml (with a short guide)
 #   7. writes the systemd *user* unit
 #   8. starts the daemon and waits until it answers
-#   9. registers the global shortcut
+#   9. registers the global shortcut for the desktop that is running
 #  10. verifies everything and prints a report
 #
 # Usage: scripts/install-user.sh [extras] [options]
@@ -25,6 +25,9 @@
 #             --no-service   do not touch the systemd user unit
 #             --no-mic-check skip the microphone test
 #             --hotkey COMBO the shortcut to register (default: Meta+Alt+V)
+#             --desktop NAME register the shortcut for a specific desktop
+#                        (auto, kde, gnome, hyprland, sway, i3)
+#             --hotkey-only  only register the global shortcut, install nothing
 #             -v, --verbose  show the full output of every command
 #             -q, --quiet    only report problems
 #             --help         show this help
@@ -47,6 +50,8 @@ DO_HOTKEY=1
 DO_SERVICE=1
 DO_SYSTEM_DEPS=0
 DO_MIC_CHECK=1
+HOTKEY_ONLY=0
+DESKTOP_OVERRIDE=""
 HOTKEY_COMBO="${HOTKEY:-Meta+Alt+V}"
 VERBOSE=0
 QUIET=0
@@ -64,6 +69,9 @@ Usage: scripts/install-user.sh [extras] [options]
             --no-service    do not touch the systemd user unit
             --no-mic-check  skip the microphone test
             --hotkey COMBO  shortcut to register (default: Meta+Alt+V)
+            --desktop NAME  register the shortcut for a specific desktop
+                            (auto, kde, gnome, hyprland, sway, i3)
+            --hotkey-only   only register the global shortcut, install nothing
             -v, --verbose   show the full output of every command
             -q, --quiet     only report problems
             --help          show this help
@@ -72,6 +80,7 @@ Examples:
   scripts/install-user.sh                       # install / update, keep the old extras
   scripts/install-user.sh socks,vosk            # add the offline engine
   scripts/install-user.sh --system-deps         # also install the system packages
+  scripts/install-user.sh --hotkey-only         # only (re-)register the shortcut
   HOTKEY=Ctrl+Alt+Space scripts/install-user.sh
 EOF
 }
@@ -193,6 +202,502 @@ with open("pyproject.toml", "rb") as fh:
 ' 2>/dev/null || printf '%s' "socks vosk whisper hotkey translate dev"
 }
 
+# ------------------------------------------------------------------ shortcut
+# The global shortcut belongs to the desktop, not to the daemon, and every
+# desktop keeps it in a different place. The installer therefore writes it
+# where the running desktop expects it:
+#
+#   KDE Plasma   a command shortcut in ~/.config/kglobalshortcutsrc
+#   GNOME        a custom keybinding of the media-keys plugin (gsettings)
+#   Hyprland     a bind line in ~/.config/hypr/voicetype.conf
+#   Sway / i3    a bindsym line in the config of the compositor
+#
+# The combination is written in the KDE syntax ("Meta+Alt+V") and translated
+# into the syntax of the desktop. A desktop that we do not know gets the exact
+# line to add by hand.
+
+HOTKEY_DESKTOP=""
+HOTKEY_DESKTOP_NAME=""
+HOTKEY_TARGET=""
+COMBO_MODS=""
+COMBO_KEY=""
+
+# the readable name of a desktop
+hotkey_desktop_name() {
+    case "$1" in
+        kde) printf 'KDE Plasma' ;;
+        gnome) printf 'GNOME' ;;
+        hyprland) printf 'Hyprland' ;;
+        sway) printf 'Sway' ;;
+        i3) printf 'i3' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# which desktop is running?
+detect_desktop() {
+    local candidate
+    # the first candidate that names a known desktop wins — the environment
+    # of a session can hold more than one name (XDG_CURRENT_DESKTOP and
+    # XDG_SESSION_DESKTOP do not always agree)
+    for candidate in "${DESKTOP_OVERRIDE:-}" "${XDG_CURRENT_DESKTOP:-}" "${XDG_SESSION_DESKTOP:-}"; do
+        [ -n "$candidate" ] || continue
+        candidate="$(printf '%s' "$candidate" | tr '[:upper:]' '[:lower:]')"
+        case "$candidate" in
+            auto) continue ;;
+            *kde* | *plasma*) printf 'kde'; return 0 ;;
+            *gnome*) printf 'gnome'; return 0 ;;
+            *hyprland*) printf 'hyprland'; return 0 ;;
+            *sway*) printf 'sway'; return 0 ;;
+            *i3*) printf 'i3'; return 0 ;;
+        esac
+    done
+    # no desktop in the environment — ask the running session
+    if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+        printf 'hyprland'
+    elif [ -n "${SWAYSOCK:-}" ]; then
+        printf 'sway'
+    else
+        printf 'unknown'
+    fi
+}
+
+# split "Meta+Alt+V" into its modifiers and its key
+combo_parse() {
+    local rest="${1:-}" part toks="" mods="" m lower
+    COMBO_MODS=""
+    COMBO_KEY=""
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            *+*) part="${rest%%+*}"; rest="${rest#*+}" ;;
+            *) part="$rest"; rest="" ;;
+        esac
+        [ -n "$part" ] || continue
+        toks="$toks $part"
+    done
+    [ -n "$toks" ] || return 1
+    COMBO_KEY="${toks##* }"
+    mods="${toks% *}"
+    if [ "$mods" = "$toks" ]; then mods=""; fi
+    for m in $mods; do
+        lower="$(printf '%s' "$m" | tr '[:upper:]' '[:lower:]')"
+        case "$lower" in
+            ctrl | control) m="CTRL" ;;
+            alt) m="ALT" ;;
+            shift) m="SHIFT" ;;
+            meta | super | mod | win | logo | command | cmd) m="META" ;;
+            *) m="$(printf '%s' "$m" | tr '[:lower:]' '[:upper:]')" ;;
+        esac
+        COMBO_MODS="$COMBO_MODS $m"
+    done
+    COMBO_MODS="${COMBO_MODS# }"
+    [ -n "$COMBO_KEY" ] || return 1
+    return 0
+}
+
+# the key in the naming of X11 (GNOME, Hyprland, Sway, i3);
+# a single letter is lower case, unless shift is part of the combination
+combo_key_xkb() {
+    local key="$1" upper="${2:-0}"
+    case "$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')" in
+        space) printf 'space' ;;
+        return | enter) printf 'Return' ;;
+        escape | esc) printf 'Escape' ;;
+        del | delete) printf 'Delete' ;;
+        backspace) printf 'BackSpace' ;;
+        pageup | page_up) printf 'Page_Up' ;;
+        pagedown | page_down) printf 'Page_Down' ;;
+        tab) printf 'Tab' ;;
+        up) printf 'Up' ;;
+        down) printf 'Down' ;;
+        left) printf 'Left' ;;
+        right) printf 'Right' ;;
+        home) printf 'Home' ;;
+        end) printf 'End' ;;
+        insert) printf 'Insert' ;;
+        [A-Za-z])
+            if [ "$upper" -eq 1 ]; then
+                printf '%s' "$key" | tr '[:lower:]' '[:upper:]'
+            else
+                printf '%s' "$key" | tr '[:upper:]' '[:lower:]'
+            fi
+            ;;
+        *) printf '%s' "$key" ;;
+    esac
+}
+
+# the key in the naming of Qt (KDE)
+combo_key_kde() {
+    local key="$1"
+    case "$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')" in
+        space) printf 'Space' ;;
+        return | enter) printf 'Return' ;;
+        escape | esc) printf 'Escape' ;;
+        del | delete) printf 'Delete' ;;
+        backspace) printf 'Backspace' ;;
+        pageup | page_up) printf 'PageUp' ;;
+        pagedown | page_down) printf 'PageDown' ;;
+        tab) printf 'Tab' ;;
+        up) printf 'Up' ;;
+        down) printf 'Down' ;;
+        left) printf 'Left' ;;
+        right) printf 'Right' ;;
+        home) printf 'Home' ;;
+        end) printf 'End' ;;
+        insert) printf 'Insert' ;;
+        [A-Za-z]) printf '%s' "$key" | tr '[:lower:]' '[:upper:]' ;;
+        *) printf '%s' "$key" ;;
+    esac
+}
+
+# the combination in the syntax of the desktop
+combo_for_kde() {
+    local out="" m
+    for m in $COMBO_MODS; do
+        case "$m" in
+            CTRL) out="${out:+$out+}Ctrl" ;;
+            ALT) out="${out:+$out+}Alt" ;;
+            SHIFT) out="${out:+$out+}Shift" ;;
+            META) out="${out:+$out+}Meta" ;;
+            *) out="${out:+$out+}$m" ;;
+        esac
+    done
+    printf '%s+%s' "$out" "$(combo_key_kde "$COMBO_KEY")"
+}
+
+combo_for_gnome() {
+    local out="" m
+    for m in $COMBO_MODS; do
+        case "$m" in
+            CTRL) out="$out<Control>" ;;
+            ALT) out="$out<Alt>" ;;
+            SHIFT) out="$out<Shift>" ;;
+            META) out="$out<Super>" ;;
+            *) out="$out<$m>" ;;
+        esac
+    done
+    printf '%s%s' "$out" "$(combo_key_xkb "$COMBO_KEY")"
+}
+
+combo_for_hyprland() {
+    local out="" m upper=0
+    for m in $COMBO_MODS; do
+        case "$m" in
+            CTRL) m="CTRL" ;;
+            ALT) m="ALT" ;;
+            SHIFT)
+                m="SHIFT"
+                upper=1
+                ;;
+            META) m="SUPER" ;;
+        esac
+        if [ -n "$out" ]; then
+            out="${out}_$m"
+        else
+            out="$m"
+        fi
+    done
+    printf '%s, %s' "$out" "$(combo_key_xkb "$COMBO_KEY" "$upper")"
+}
+
+combo_for_sway() {
+    local out="" m
+    for m in $COMBO_MODS; do
+        case "$m" in
+            CTRL) out="${out:+$out+}Ctrl" ;;
+            ALT) out="${out:+$out+}Alt" ;;
+            SHIFT) out="${out:+$out+}Shift" ;;
+            META) out="${out:+$out+}Super" ;;
+            *) out="${out:+$out+}$m" ;;
+        esac
+    done
+    printf '%s+%s' "$out" "$(combo_key_xkb "$COMBO_KEY")"
+}
+
+# i3 knows the X11 modifiers, not the aliases of sway
+combo_for_i3() {
+    local out="" m
+    for m in $COMBO_MODS; do
+        case "$m" in
+            CTRL) out="${out:+$out+}Control" ;;
+            ALT) out="${out:+$out+}Mod1" ;;
+            SHIFT) out="${out:+$out+}Shift" ;;
+            META) out="${out:+$out+}Mod4" ;;
+            *) out="${out:+$out+}$m" ;;
+        esac
+    done
+    printf '%s+%s' "$out" "$(combo_key_xkb "$COMBO_KEY")"
+}
+
+# the command that toggles the daemon
+find_toggle() {
+    local t dir
+    t="$(command -v voicetype-toggle 2>/dev/null || true)"
+    if [ -z "$t" ]; then
+        # ~/.local/bin is often not in the PATH of a desktop session
+        for dir in "${PIPX_BIN_DIR:-}" "$HOME/.local/bin"; do
+            if [ -n "$dir" ] && [ -x "$dir/voicetype-toggle" ]; then
+                t="$dir/voicetype-toggle"
+                break
+            fi
+        done
+    fi
+    printf '%s' "$t"
+}
+
+# Plasma: a command shortcut in kglobalshortcutsrc
+#
+# Plasma 6 notes (verified on Plasma 6.7 / Wayland):
+#   * The shortcut registry lives *inside* kwin_wayland (it owns org.kde.kglobalaccel),
+#     not in the kglobalacceld daemon — so the registry is re-read at session start.
+#     Restarting kglobalacceld does nothing; the user has to log out/in once.
+#   * The command-shortcut desktop file must be in ~/.local/share/applications/ so that
+#     KService::serviceByStorageId() resolves it (System Settings → Shortcuts reads it
+#     from there too). A copy in ~/.local/share/kglobalaccel/ is used as a fallback;
+#     that copy must be executable, otherwise KIO refuses to launch it with
+#     "You are not authorized to execute this file".
+#   * A key can only be owned by one action. Alt+Space is KRunner's default shortcut,
+#     so it has to be freed there first or the older action always wins.
+register_kde() {
+    local combo="$1" toggle="$2"
+    local data="${XDG_DATA_HOME:-$HOME/.local/share}"
+    local apps="$data/applications" kga="$data/kglobalaccel"
+    local name="voicetype-toggle.desktop"
+    local kwrite tmp
+    kwrite="$(command -v kwriteconfig6 || command -v kwriteconfig5 || true)"
+    if [ -z "$kwrite" ]; then
+        echo "kwriteconfig6/5 is not installed — the Plasma tools are missing" >&2
+        return 1
+    fi
+    mkdir -p "$apps" "$kga" || return 1
+    # write it atomically: a half-written desktop file would not be registered
+    tmp="$apps/.$name.$$"
+    if ! cat > "$tmp" <<EOF
+[Desktop Entry]
+Type=Application
+Name=VoiceType Toggle
+Comment=Start/stop voice dictation
+Exec="$toggle"
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;
+NoDisplay=false
+StartupNotify=false
+X-KDE-GlobalAccel-CommandShortcut=true
+EOF
+    then
+        rm -f "$tmp"
+        return 1
+    fi
+    chmod 644 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$apps/$name" || {
+        rm -f "$tmp"
+        return 1
+    }
+    # Fallback copy for the registry; KIO only launches it when the file is executable.
+    cp "$apps/$name" "$kga/$name" || return 1
+    chmod 755 "$kga/$name" 2>/dev/null || true
+    "$kwrite" --file kglobalshortcutsrc --group services --group "$name" --key _launch "$combo" || return 1
+    kbuildsycoca6 >/dev/null 2>&1 || true
+    printf "registered '%s' in ~/.config/kglobalshortcutsrc\n" "$combo"
+}
+
+# GNOME: a custom keybinding of the media-keys plugin
+#
+# The list of the custom keybindings is read and written as a whole, so the
+# bindings of the user have to survive — that is why the list is edited with
+# python instead of a plain "gsettings set".
+register_gnome() {
+    local combo="$1" toggle="$2"
+    local binding py
+    if ! have gsettings; then
+        echo "gsettings is not installed — the GNOME tools are missing" >&2
+        return 1
+    fi
+    if ! gsettings list-schemas 2>/dev/null | grep -q "^org.gnome.settings-daemon.plugins.media-keys$"; then
+        echo "the GNOME media-keys schema is not available — is GNOME Shell running?" >&2
+        return 1
+    fi
+    py="$(command -v python3 || true)"
+    if [ -z "$py" ]; then
+        echo "python3 is missing — the GNOME keybindings cannot be edited" >&2
+        return 1
+    fi
+    binding="$(combo_for_gnome)"
+    "$py" - "VoiceType Toggle" "$toggle" "$binding" <<'PY' || return 1
+import ast
+import subprocess
+import sys
+
+name, command, binding = sys.argv[1:4]
+schema = "org.gnome.settings-daemon.plugins.media-keys"
+key = "custom-keybindings"
+
+
+def gsettings(*args):
+    return subprocess.run(["gsettings", *args], capture_output=True, text=True)
+
+
+raw = gsettings("get", schema, key).stdout.strip()
+try:
+    items = ast.literal_eval(raw) if raw else []
+except Exception:
+    items = []
+if not isinstance(items, list):
+    items = []
+
+# our own binding is replaced, every other one is kept
+items = [i for i in items if not (isinstance(i, dict) and i.get("name") == name)]
+items.append({"name": name, "command": command, "binding": binding})
+
+proc = gsettings("set", schema, key, repr(items))
+if proc.returncode != 0:
+    sys.stderr.write((proc.stderr.strip() or "gsettings set failed") + "\n")
+    raise SystemExit(1)
+print(f"{name} -> {binding} -> {command}")
+PY
+}
+
+# Hyprland: a bind line in a file of our own
+#
+# hyprland.conf has to read the file — a "source" line is added once and
+# kept, so a second run of the installer does not add it again.
+register_hyprland() {
+    local combo="$1" toggle="$2"
+    local dir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+    local main="$dir/hyprland.conf" ours="$dir/voicetype.conf"
+    local bind tmp
+    bind="bind = $(combo_for_hyprland), exec, $toggle"
+    mkdir -p "$dir" || return 1
+    tmp="$ours.$$"
+    if ! {
+        echo "# VoiceType — the global shortcut (written by scripts/install-user.sh)"
+        echo "# The installer rewrites this file — do not edit it."
+        echo "$bind"
+    } > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -f "$tmp" "$ours" || {
+        rm -f "$tmp"
+        return 1
+    }
+    if [ ! -f "$main" ]; then
+        printf 'source = %s\n' "$ours" > "$main" || return 1
+    elif ! grep -qF "voicetype.conf" "$main"; then
+        printf '\n# VoiceType\nsource = %s\n' "$ours" >> "$main" || return 1
+    fi
+    hyprctl reload >/dev/null 2>&1 || true
+    printf "registered '%s' in %s\n" "$combo" "$ours"
+}
+
+# Sway and i3: a bindsym line in the config of the compositor
+#
+# The line lives in a block of its own, so that a later run replaces it
+# instead of adding a second binding for the same key.
+register_compositor() {
+    local combo="$1" toggle="$2" name="$3"
+    local dir="${XDG_CONFIG_HOME:-$HOME/.config}/$name"
+    local cfg="$dir/config"
+    local line tmp
+    line="bindsym $(combo_for_sway), exec, $toggle"
+    if [ "$name" = "i3" ]; then
+        line="bindsym $(combo_for_i3), exec, $toggle"
+    fi
+    mkdir -p "$dir" || return 1
+    tmp="$cfg.voicetype.$$"
+    if [ -f "$cfg" ]; then
+        # drop the block of a previous run
+        if ! sed '/^# >>> voicetype >>>$/,/^# <<< voicetype <<<$/{d}' "$cfg" > "$tmp"; then
+            rm -f "$tmp"
+            return 1
+        fi
+    else
+        : > "$tmp" || {
+            rm -f "$tmp"
+            return 1
+        }
+    fi
+    # the config has to end with a newline, otherwise the block would be
+    # glued to the last line of the user
+    if [ -s "$tmp" ] && [ -n "$(tail -c 1 "$tmp" 2>/dev/null || true)" ]; then
+        printf '\n' >> "$tmp" || {
+            rm -f "$tmp"
+            return 1
+        }
+    fi
+    if ! {
+        echo "# >>> voicetype >>>"
+        echo ""
+        echo "$line"
+        echo ""
+        echo "# <<< voicetype <<<"
+    } >> "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -f "$tmp" "$cfg" || {
+        rm -f "$tmp"
+        return 1
+    }
+    if [ "$name" = "i3" ]; then
+        i3-msg reload >/dev/null 2>&1 || true
+    else
+        swaymsg reload >/dev/null 2>&1 || true
+    fi
+    printf "registered '%s' in %s\n" "$combo" "$cfg"
+}
+
+# what the user has to add by hand when the installer cannot do it
+hotkey_manual_instructions() {
+    local combo="${1:-$HOTKEY_COMBO}" toggle="${2:-voicetype-toggle}"
+    printf '  KDE Plasma : System Settings -> Keyboard -> Shortcuts -> Custom Shortcuts\n'
+    printf '               %s -> %s\n' "$combo" "$toggle"
+    printf '  GNOME      : Settings -> Keyboard -> View and Customize Shortcuts -> Custom Shortcuts\n'
+    printf '               command: %s   shortcut: %s\n' "$toggle" "$(combo_for_gnome)"
+    printf '  Hyprland   : add this line to ~/.config/hypr/hyprland.conf\n'
+    printf '               bind = %s, exec, %s\n' "$(combo_for_hyprland)" "$toggle"
+    printf '  Sway       : add this line to ~/.config/sway/config\n'
+    printf '               bindsym %s, exec, %s\n' "$(combo_for_sway)" "$toggle"
+    printf '  i3         : add this line to ~/.config/i3/config\n'
+    printf '               bindsym %s, exec, %s\n' "$(combo_for_i3)" "$toggle"
+}
+
+# register the global shortcut for the desktop that is running
+register_hotkey() {
+    local combo="${1:-$HOTKEY_COMBO}"
+    local desktop toggle rc=0
+    desktop="$(detect_desktop)"
+    HOTKEY_DESKTOP="$desktop"
+    HOTKEY_DESKTOP_NAME="$(hotkey_desktop_name "$desktop")"
+    if ! combo_parse "$combo"; then
+        echo "'$combo' is not a key combination (e.g. Meta+Alt+V)" >&2
+        return 1
+    fi
+    toggle="$(find_toggle)"
+    if [ -z "$toggle" ]; then
+        echo "voicetype-toggle was not found — install VoiceType before using the shortcut" >&2
+        toggle="voicetype-toggle"
+    fi
+    HOTKEY_TARGET="$toggle"
+    case "$desktop" in
+        kde) register_kde "$(combo_for_kde)" "$toggle" || rc=1 ;;
+        gnome) register_gnome "$combo" "$toggle" || rc=1 ;;
+        hyprland) register_hyprland "$combo" "$toggle" || rc=1 ;;
+        sway) register_compositor "$combo" "$toggle" sway || rc=1 ;;
+        i3) register_compositor "$combo" "$toggle" i3 || rc=1 ;;
+        *)
+            echo "the desktop '$desktop' is not known" >&2
+            rc=1
+            ;;
+    esac
+    if [ "$rc" -ne 0 ]; then
+        echo "add the binding by hand:" >&2
+        hotkey_manual_instructions "$combo" "$toggle" >&2
+    fi
+    return "$rc"
+}
+
 # ------------------------------------------------------------------ arguments
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -208,6 +713,13 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --hotkey=*) HOTKEY_COMBO="${1#*=}" ;;
+        --desktop)
+            [ $# -ge 2 ] || die "--desktop needs a name (auto, kde, gnome, hyprland, sway, i3)"
+            DESKTOP_OVERRIDE="$2"
+            shift
+            ;;
+        --desktop=*) DESKTOP_OVERRIDE="${1#*=}" ;;
+        --hotkey-only) HOTKEY_ONLY=1 ;;
         -v | --verbose) VERBOSE=1 ;;
         -q | --quiet) QUIET=1 ;;
         -h | --help)
@@ -219,6 +731,11 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+case "$DESKTOP_OVERRIDE" in
+    "" | auto | kde | gnome | hyprland | sway | i3) ;;
+    *) die "unknown desktop '$DESKTOP_OVERRIDE' (known: auto, kde, gnome, hyprland, sway, i3)" ;;
+esac
 
 # ------------------------------------------------------------------ preflight
 if [ "$(id -u)" -eq 0 ]; then
@@ -233,9 +750,11 @@ fi
 [ -n "${HOME:-}" ] && [ -d "${HOME:-}" ] || die "HOME is not set — cannot install anything"
 
 PYTHON="$(command -v python3 || true)"
-[ -n "$PYTHON" ] || die "python3 is missing — install it first (e.g. 'sudo apt install python3')"
-if [ "$("$PYTHON" -c 'import sys; print(1 if sys.version_info >= (3, 11) else 0)' 2>/dev/null || echo 0)" != "1" ]; then
-    die "python 3.11 or newer is required (found: $("$PYTHON" -V 2>&1))"
+if [ "$HOTKEY_ONLY" -eq 0 ]; then
+    [ -n "$PYTHON" ] || die "python3 is missing — install it first (e.g. 'sudo apt install python3')"
+    if [ "$("$PYTHON" -c 'import sys; print(1 if sys.version_info >= (3, 11) else 0)' 2>/dev/null || echo 0)" != "1" ]; then
+        die "python 3.11 or newer is required (found: $("$PYTHON" -V 2>&1))"
+    fi
 fi
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/voicetype-install.XXXXXX")"
@@ -263,6 +782,20 @@ if have flock && [ -n "$lock_dir" ] && [ -d "$lock_dir" ]; then
     else
         warn "cannot write $lock_file — no lock against a parallel installation"
     fi
+fi
+
+# ------------------------------------------------------- shortcut only
+# "--hotkey-only" registers the global shortcut and nothing else. It is what
+# the packages call when VoiceType is installed system wide, where there is
+# no pipx venv to rebuild.
+if [ "$HOTKEY_ONLY" -eq 1 ]; then
+    step "Shortcut"
+    if register_hotkey "$HOTKEY_COMBO"; then
+        printf '\nRegistered %s -> %s (%s)\n' "$HOTKEY_COMBO" "$HOTKEY_TARGET" "$HOTKEY_DESKTOP_NAME"
+        exit 0
+    fi
+    warn "the shortcut was not registered"
+    exit 1
 fi
 
 # ------------------------------------------------------------------ distro
@@ -1134,21 +1667,15 @@ step "Shortcut"
 if [ "$DO_HOTKEY" -eq 0 ]; then
     res_skip "skipped (--no-hotkey)"
     HOTKEY_STATE="not registered (--no-hotkey)"
-elif [ ! -f "$ROOT/scripts/install-hotkey.sh" ]; then
-    res_skip "scripts/install-hotkey.sh is missing"
-    HOTKEY_STATE="not registered (install-hotkey.sh missing)"
 else
     hotkey_log="$WORK_DIR/hotkey.log"
-    if PIPX_BIN_DIR="$PIPX_BIN_DIR" bash "$ROOT/scripts/install-hotkey.sh" "$HOTKEY_COMBO" > "$hotkey_log" 2>&1; then
-        res_ok "$HOTKEY_COMBO registered"
-        HOTKEY_STATE="$HOTKEY_COMBO (KDE Plasma)"
+    if register_hotkey "$HOTKEY_COMBO" >"$hotkey_log" 2>&1; then
+        res_ok "$HOTKEY_COMBO registered on $HOTKEY_DESKTOP_NAME"
+        HOTKEY_STATE="$HOTKEY_COMBO ($HOTKEY_DESKTOP_NAME)"
         [ "$VERBOSE" -eq 1 ] && cat "$hotkey_log"
     else
         res_warn "the shortcut was not registered automatically"
-        res_info "KDE Plasma : re-run scripts/install-hotkey.sh after installing kwriteconfig6"
-        res_info "Hyprland   : bind = SUPER ALT, V, exec, voicetype-toggle (hyprland.conf)"
-        res_info "Sway / i3  : bindsym \$mod+alt+v, exec, voicetype-toggle   (config)"
-        res_info "GNOME      : Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts"
+        sed 's/^/    /' "$hotkey_log" 2>/dev/null | grep -v '^[[:space:]]*$' || true
         HOTKEY_STATE="$HOTKEY_COMBO (not registered — see the instructions above)"
     fi
 fi

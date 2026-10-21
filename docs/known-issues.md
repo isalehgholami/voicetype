@@ -7,7 +7,7 @@
 5. **Persian ZWNJ rules are heuristic** (`می `/`نمی ` prefixes, `ها`/`تر` suffixes). Add exceptions via `[postprocess.custom_replacements]`.
 6. **Vosk Persian accuracy is lower than Google/Whisper**, especially for embedded English terms (the term dictionary fixes ~40 common ones).
 7. **Clipboard managers** (Klipper) may keep dictated text in their history.
-8. **KDE shortcut registration** (`install-hotkey.sh`) writes `kglobalshortcutsrc` directly; the format can vary between Plasma releases — fall back to System Settings → Shortcuts → Add Command.
+8. **KDE shortcut registration** (the shortcut step of `scripts/install-user.sh`) writes `kglobalshortcutsrc` directly; the format can vary between Plasma releases — fall back to System Settings → Shortcuts → Add Command.
 9. **Segmented streaming sends more requests to Google** (one per sentence + a refresh every `stream_interim_seconds`). If the free endpoint rate-limits you, set `stream_interim_seconds = 0` or `streaming = false`.
 10. **Streaming for Google is simulated** (cut at pauses), not a true duplex stream — Google offers no official streaming for the free endpoint. Words can differ slightly between the live preview and the final text.
 11. **Translation uses an unofficial endpoint** (py-googletrans / Google Translate web API): it can be rate-limited or blocked, and the wording is not always idiomatic. A failed translation never eats the transcript — the original text is injected and the overlay warns.

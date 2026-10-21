@@ -4,6 +4,7 @@ The script is exercised against fake ``pipx``/``systemctl`` binaries so that the
 real user home is never touched.
 """
 
+import ast
 import json
 import os
 import re
@@ -146,6 +147,30 @@ KWRITECONFIG_STUB = """#!/usr/bin/env bash
 set -u
 printf '%s\\n' "$*" >> "$STUB_STATE/kwriteconfig.log"
 exit 0
+"""
+
+# a gsettings that keeps the custom keybindings in a file
+GSETTINGS_STUB = """#!/usr/bin/env python3
+import os
+import sys
+
+state = os.environ["STUB_STATE"]
+with open(os.path.join(state, "gsettings.log"), "a", encoding="utf-8") as fh:
+    fh.write(" ".join(sys.argv[1:]) + "\\n")
+
+store = os.path.join(state, "gsettings-custom-keybindings")
+command = sys.argv[1]
+if command == "list-schemas":
+    print("org.gnome.settings-daemon.plugins.media-keys")
+elif command == "get":
+    if os.path.exists(store):
+        with open(store, encoding="utf-8") as fh:
+            sys.stdout.write(fh.read())
+    else:
+        print("[]")
+elif command == "set":
+    with open(store, "w", encoding="utf-8") as fh:
+        fh.write(sys.argv[-1])
 """
 
 # a user that is in no group at all
@@ -370,9 +395,13 @@ def test_without_a_systemd_user_session_the_install_still_succeeds(env):
 def test_hotkey_registration_failure_does_not_fail_the_install(env):
     e, state, home = env
     _pipx_json(state, installed=False)
-    r = _run(e)  # no --no-hotkey: install-hotkey.sh runs and fails (no KDE)
+    e["XDG_CURRENT_DESKTOP"] = "SomeDesktop"
+    e["XDG_SESSION_DESKTOP"] = ""
+    r = _run(e)  # no --no-hotkey: the shortcut cannot be registered
     assert r.returncode == 0, r.stderr
     assert (home / ".config" / "voicetype" / "config.toml").exists()
+    # the user is told what to add by hand
+    assert "add the binding by hand" in r.stdout
 
 
 def test_summary_reports_what_happened(env):
@@ -395,7 +424,8 @@ def test_help_lists_the_options(env):
     e, state, home = env
     r = _run(e, "--help")
     assert r.returncode == 0
-    for flag in ("--reinstall", "--reset-extras", "--no-hotkey", "--system-deps", "--no-service"):
+    for flag in ("--reinstall", "--reset-extras", "--no-hotkey", "--system-deps", "--no-service",
+                 "--desktop", "--hotkey-only"):
         assert flag in r.stdout
 
 
@@ -523,6 +553,8 @@ def test_the_hotkey_combination_is_forwarded(env):
     _pipx_json(state, installed=False)
     bindir = Path(e["PATH"].split(":")[0])
     _write_stub(bindir / "kwriteconfig6", KWRITECONFIG_STUB)
+    e["XDG_CURRENT_DESKTOP"] = "KDE"
+    e["XDG_SESSION_DESKTOP"] = ""
     r = _run(e, "--hotkey", "Ctrl+Alt+Space")
     assert r.returncode == 0, r.stderr
     assert "Ctrl+Alt+Space" in _log(state, "kwriteconfig.log")
@@ -773,4 +805,137 @@ def test_the_audio_tools_package_is_mapped_per_distribution():
         "pipewire-tools",  # alpine
         "pipewire",  # void
     ]
+
+
+# --------------------------------------------------------------------------
+# the global shortcut: every desktop keeps it in a different place
+# --------------------------------------------------------------------------
+
+
+def _gnome_bindings(state: Path) -> list:
+    """The custom keybindings that the gsettings stub keeps."""
+    store = state / "gsettings-custom-keybindings"
+    if not store.exists():
+        return []
+    return ast.literal_eval(store.read_text(encoding="utf-8"))
+
+
+def test_the_shortcut_is_registered_on_gnome(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    bindir = Path(e["PATH"].split(":")[0])
+    _write_stub(bindir / "gsettings", GSETTINGS_STUB)
+    # a binding of the user has to survive
+    (state / "gsettings-custom-keybindings").write_text(
+        "[{'name': 'Other', 'command': 'other', 'binding': '<Super>e'}]", encoding="utf-8"
+    )
+    e["XDG_CURRENT_DESKTOP"] = "GNOME"
+    e["XDG_SESSION_DESKTOP"] = ""
+    r = _run(e)
+    assert r.returncode == 0, r.stderr
+    bindings = _gnome_bindings(state)
+    names = [b.get("name") for b in bindings]
+    assert "VoiceType Toggle" in names
+    assert "Other" in names  # the binding of the user is still there
+    ours = next(b for b in bindings if b.get("name") == "VoiceType Toggle")
+    assert ours["binding"] == "<Super><Alt>v"
+    assert ours["command"].endswith("voicetype-toggle")
+
+
+def test_the_shortcut_is_registered_on_hyprland(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    e["XDG_CURRENT_DESKTOP"] = "Hyprland"
+    e["XDG_SESSION_DESKTOP"] = ""
+    r = _run(e)
+    assert r.returncode == 0, r.stderr
+    ours = (home / ".config" / "hypr" / "voicetype.conf").read_text(encoding="utf-8")
+    assert "bind = SUPER_ALT, v, exec," in ours
+    assert "voicetype-toggle" in ours
+    # hyprland.conf has to read the file
+    main = (home / ".config" / "hypr" / "hyprland.conf").read_text(encoding="utf-8")
+    assert "voicetype.conf" in main
+    assert "source" in main
+
+
+def test_the_hyprland_binding_is_not_written_twice(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    e["XDG_CURRENT_DESKTOP"] = "Hyprland"
+    e["XDG_SESSION_DESKTOP"] = ""
+    assert _run(e).returncode == 0
+    assert _run(e).returncode == 0
+    main = (home / ".config" / "hypr" / "hyprland.conf").read_text(encoding="utf-8")
+    assert main.count("voicetype.conf") == 1
+    ours = (home / ".config" / "hypr" / "voicetype.conf").read_text(encoding="utf-8")
+    assert ours.count("bind = ") == 1
+
+
+def test_the_shortcut_is_registered_on_sway(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    cfg = home / ".config" / "sway" / "config"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("bindsym $mod+Return exec kitty\n", encoding="utf-8")
+    e["XDG_CURRENT_DESKTOP"] = "sway"
+    e["XDG_SESSION_DESKTOP"] = ""
+    r = _run(e)
+    assert r.returncode == 0, r.stderr
+    text = cfg.read_text(encoding="utf-8")
+    # the config of the user is kept
+    assert "bindsym $mod+Return exec kitty" in text
+    assert "bindsym Super+Alt+v, exec," in text
+    # a second run replaces the binding instead of adding a second one
+    assert _run(e).returncode == 0
+    text = cfg.read_text(encoding="utf-8")
+    assert text.count("bindsym Super+Alt+v") == 1
+
+
+def test_the_shortcut_is_registered_on_i3(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    e["XDG_CURRENT_DESKTOP"] = "i3"
+    e["XDG_SESSION_DESKTOP"] = ""
+    r = _run(e)
+    assert r.returncode == 0, r.stderr
+    text = (home / ".config" / "i3" / "config").read_text(encoding="utf-8")
+    # i3 knows the X11 modifiers, not the aliases of sway
+    assert "bindsym Mod4+Mod1+v, exec," in text
+
+
+def test_the_desktop_can_be_chosen_by_hand(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    e["XDG_CURRENT_DESKTOP"] = ""
+    e["XDG_SESSION_DESKTOP"] = ""
+    r = _run(e, "--desktop", "hyprland")
+    assert r.returncode == 0, r.stderr
+    assert (home / ".config" / "hypr" / "voicetype.conf").exists()
+
+
+def test_an_unknown_desktop_is_rejected(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    r = _run(e, "--desktop", "windows")
+    assert r.returncode != 0
+    assert "unknown desktop" in r.stderr
+
+
+def test_the_shortcut_can_be_registered_without_an_installation(env, tmp_path):
+    e, state, home = env
+    # a PATH without pipx: the shortcut does not need a venv
+    minimal = tmp_path / "minimal-bin"
+    minimal.mkdir()
+    _write_stub(minimal / "kwriteconfig6", KWRITECONFIG_STUB)
+    e["PATH"] = f"{minimal}:/usr/bin:/bin"
+    e["XDG_CURRENT_DESKTOP"] = "KDE"
+    e["XDG_SESSION_DESKTOP"] = ""
+    r = _run(e, "--hotkey-only", "--hotkey", "Meta+Alt+V")
+    assert r.returncode == 0, r.stderr
+    # nothing was installed
+    assert not (state / "pipx.log").exists()
+    assert not (home / ".config" / "systemd" / "user" / "voicetype.service").exists()
+    # but the shortcut was registered
+    assert "Meta+Alt+V" in _log(state, "kwriteconfig.log")
+
 
