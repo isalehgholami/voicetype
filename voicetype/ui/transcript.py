@@ -21,6 +21,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from ..config import DEFAULT_FONT
+from ..text import LTR, base_direction
 from .easing import clamp, ease_in_out, ease_out_cubic, progress
 
 __all__ = [
@@ -79,6 +80,9 @@ class TranscriptFrame:
     previous_words: tuple[str, ...]
     current_words: tuple[str, ...]
     words: tuple[RenderWord, ...]
+    #: The direction the words run in ("ltr" or "rtl").  A Persian or Arabic
+    #: transcript is laid out from the right, an English one from the left.
+    direction: str = LTR
 
 
 def _lcs_matches(previous: Sequence[str], current: Sequence[str]) -> tuple[tuple[int, int], ...]:
@@ -131,6 +135,7 @@ class TranscriptAnimator:
         self.previous_words: tuple[str, ...] = ()
         self.current_words: tuple[str, ...] = ()
         self.matches: tuple[tuple[int, int], ...] = ()
+        self.direction: str = LTR
         self.transition_started_at = self._clock()
         self.last_activity_at = self.transition_started_at
 
@@ -142,6 +147,12 @@ class TranscriptAnimator:
         """Feed a new partial transcript. Returns ``True`` when it changed."""
         now = self._clock() if now is None else now
         words = self._extract_words(text)
+
+        # The direction belongs to the whole paragraph, not to the word window
+        # that is kept: a Persian sentence stays right-to-left even when only
+        # its last words are on screen.
+        if text:
+            self.direction = base_direction(text)
 
         if words:
             self.last_activity_at = now
@@ -257,4 +268,5 @@ class TranscriptAnimator:
             self.previous_words,
             self.current_words,
             tuple(rendered),
+            self.direction,
         )

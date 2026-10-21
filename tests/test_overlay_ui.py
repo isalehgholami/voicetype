@@ -317,6 +317,25 @@ def test_transcript_animator_config_comes_from_the_overlay_config():
     assert config.word_limit >= 1
 
 
+def test_the_transcript_knows_the_direction_it_runs_in():
+    now = [0.0]
+    animator = TranscriptAnimator(TranscriptConfig(), clock=lambda: now[0])
+    animator.set_text("سلام دنیا")
+    assert animator.frame(now[0]).direction == "rtl"
+    animator.set_text("hello world")
+    assert animator.frame(now[0]).direction == "ltr"
+
+
+def test_the_direction_belongs_to_the_whole_paragraph_not_to_the_word_window():
+    now = [0.0]
+    animator = TranscriptAnimator(TranscriptConfig(word_limit=2), clock=lambda: now[0])
+    # only the last two words are kept, but the paragraph is still Persian
+    animator.set_text("من با Python code کار می کنم")
+    frame = animator.frame(now[0])
+    assert frame.current_words == ("می", "کنم")
+    assert frame.direction == "rtl"
+
+
 # ---------------------------------------------------------------- audio
 
 
@@ -331,6 +350,30 @@ def test_word_positions_are_centred():
     positions = word_positions([10.0, 20.0], 5.0, 100.0)
     assert positions == [32.5, 47.5]
     assert word_positions([], 5.0, 100.0) == []
+
+
+def test_an_rtl_transcript_is_laid_out_from_the_right():
+    # "سلام دنیا" — the first word is the rightmost one
+    positions = word_positions([10.0, 20.0], 5.0, 100.0, ["rtl", "rtl"], "rtl")
+    assert positions == [57.5, 32.5]
+
+
+def test_the_english_words_of_a_mixed_transcript_keep_their_order():
+    # "من با Python code کردم" — the two English words stay side by side in
+    # their own order, the Persian words keep theirs
+    directions = ["rtl", "ltr", "ltr", "rtl"]
+    positions = word_positions([10.0] * 4, 5.0, 100.0, directions, "rtl")
+    # visual order, left to right: code-ish run, then the Persian words
+    assert positions[1] < positions[2]  # Python before code
+    assert positions[3] < positions[0]  # the last Persian word is leftmost
+    assert positions[0] > positions[2]  # the first Persian word is rightmost
+
+
+def test_the_words_stay_centred_whatever_the_direction_is():
+    ltr = word_positions([10.0, 20.0, 30.0], 5.0, 100.0, ["ltr"] * 3, "ltr")
+    rtl = word_positions([10.0, 20.0, 30.0], 5.0, 100.0, ["rtl"] * 3, "rtl")
+    assert ltr == [15.0, 30.0, 55.0]
+    assert rtl == [75.0, 50.0, 15.0]
 
 
 def test_total_width_counts_the_spaces_between_the_words():

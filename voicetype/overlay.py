@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from .config import OverlayConfig
 from .dispatcher import NullOverlay, Overlay
 from .log import get_logger
+from .text import LTR, RTL, word_directions
 from .ui.animations import FadeEnvelope, VisualizerState
 from .ui.easing import clamp
 from .ui.sounds import SoundPlayer
@@ -252,16 +253,63 @@ def synthesize_samples(history: Sequence[float], count: int = WAVEFORM_BUCKETS) 
     return values
 
 
-def word_positions(widths: Sequence[float], space: float, area_width: float) -> list[float]:
-    """The left edge of every word, laid out centred in ``area_width``."""
+def word_positions(
+    widths: Sequence[float],
+    space: float,
+    area_width: float,
+    directions: Sequence[str] | None = None,
+    base: str = LTR,
+) -> list[float]:
+    """The left edge of every word, laid out centred in ``area_width``.
+
+    ``directions`` gives the direction of every word ("ltr" or "rtl"); when it
+    is omitted every word counts as left-to-right.  Neighbouring words of the
+    same direction form a run: a right-to-left run is laid out from the right,
+    a left-to-right run from the left, and the runs follow the direction of
+    the paragraph (``base``) — from the right for a Persian or Arabic
+    transcript.
+
+    That is what the bidirectional algorithm does with "من با Python code
+    کردم": the two English words stay in their own order, and the Persian
+    words keep theirs.
+    """
     if not widths:
         return []
-    total = sum(widths) + space * max(0, len(widths) - 1)
-    x = (area_width - total) / 2.0
-    positions = []
-    for width in widths:
-        positions.append(x)
-        x += width + space
+    count = len(widths)
+    if directions is None:
+        directions = [LTR] * count
+
+    # Group the words into runs of the same direction.
+    runs: list[tuple[str, list[int]]] = []
+    for index, direction in enumerate(directions):
+        if runs and runs[-1][0] == direction:
+            runs[-1][1].append(index)
+        else:
+            runs.append((direction, [index]))
+
+    # The runs are ordered like the paragraph: in a right-to-left paragraph
+    # the first run of the text is the rightmost one.
+    if base == RTL:
+        runs = list(reversed(runs))
+
+    total = sum(widths) + space * max(0, count - 1)
+    cursor = (area_width - total) / 2.0
+    positions = [0.0] * count
+    for direction, indices in runs:
+        run_width = sum(widths[index] for index in indices) + space * (len(indices) - 1)
+        if direction == RTL:
+            # the first word of the run is flush with its right edge
+            x = cursor + run_width
+            for index in indices:
+                x -= widths[index]
+                positions[index] = x
+                x -= space
+        else:
+            x = cursor
+            for index in indices:
+                positions[index] = x
+                x += widths[index] + space
+        cursor += run_width + space
     return positions
 
 
@@ -858,6 +906,11 @@ class GtkOverlay:
         config = self._animator.config
         size = float(config.font_size)
         max_width = min(config.max_width, max(0.0, float(width) - 20.0))
+        # A Persian or Arabic transcript is laid out from the right; the
+        # direction of the paragraph comes from the transcript itself.
+        base = frame.direction
+        previous_directions = word_directions(frame.previous_words, base)
+        current_directions = word_directions(frame.current_words, base)
 
         space = self._measure(cr, " ", size)
         previous = self._layout_words(cr, frame.previous_words, size)
@@ -869,8 +922,12 @@ class GtkOverlay:
             previous = self._layout_words(cr, frame.previous_words, size)
             current = self._layout_words(cr, frame.current_words, size)
 
-        previous_positions = word_positions([w for _, w in previous], space, width)
-        current_positions = word_positions([w for _, w in current], space, width)
+        previous_positions = word_positions(
+            [w for _, w in previous], space, width, previous_directions, base
+        )
+        current_positions = word_positions(
+            [w for _, w in current], space, width, current_directions, base
+        )
         baseline = self._text_baseline(width, height)
 
         for word in frame.words:
