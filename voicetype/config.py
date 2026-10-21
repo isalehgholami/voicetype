@@ -59,6 +59,12 @@ class SttConfig:
     timeout_seconds: float = 60.0
     fallback_provider: str = "vosk"  # used after fallback_after consecutive errors; "" disables
     fallback_after: int = 3
+    # Streaming: native for Vosk; for batch providers (Google, Whisper) audio is cut at pauses and sent
+    # while you talk, so text appears live and only the last segment is left at the end.
+    streaming: bool = True
+    stream_interim_seconds: float = 1.5  # refresh the in-progress sentence; 0 = only at pauses
+    stream_pause_seconds: float = 0.6  # silence that ends a segment
+    stream_max_segment_seconds: float = 12.0
     vosk: VoskConfig = field(default_factory=VoskConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     google_cloud: GoogleCloudConfig = field(default_factory=GoogleCloudConfig)
@@ -150,6 +156,9 @@ _RANGES: dict[str, tuple[float, float]] = {
     "stt.silence_threshold_seconds": (0.5, 30.0),
     "stt.timeout_seconds": (5.0, 300.0),
     "stt.fallback_after": (1, 20),
+    "stt.stream_interim_seconds": (0.0, 10.0),
+    "stt.stream_pause_seconds": (0.2, 3.0),
+    "stt.stream_max_segment_seconds": (3.0, 30.0),
     "audio.blocksize": (160, 16000),
     "audio.max_buffer_seconds": (5.0, 3600.0),
     "overlay.offset_x": (-1920, 1920),
@@ -310,6 +319,10 @@ silence_threshold_seconds = 3.0
 timeout_seconds = 60.0
 fallback_provider = "vosk" # after N consecutive failures; "" disables
 fallback_after = 3
+streaming = true           # text appears while you speak (segments are sent at pauses)
+stream_interim_seconds = 1.5   # refresh the sentence in progress; 0 = only at pauses
+stream_pause_seconds = 0.6
+stream_max_segment_seconds = 12.0
 
 [stt.vosk]
 model_path = "/usr/share/vosk/vosk-model-fa-0.42"

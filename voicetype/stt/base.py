@@ -77,6 +77,9 @@ class StreamSession(ABC):
     def finish(self) -> STTResult:
         """Flush and return the final transcript."""
 
+    def abort(self) -> None:  # noqa: B027 - optional hook
+        """Stop background work without producing a result (cancel)."""
+
 
 class STTBackend(ABC):
     name = "base"

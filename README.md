@@ -9,7 +9,7 @@ browser, Telegram, terminal, IDE, LibreOffice.
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Arch%20Linux%20%C2%B7%20KDE%20Plasma%206-1793D1?logo=archlinux&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-385_passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-406_passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 [Features](#-features) · [How it works](#-how-it-works) · [Requirements](#-requirements) · [Quick start](#-quick-start) · [Usage](#-usage) · [Configuration](#%EF%B8%8F-configuration) · [Providers](#%EF%B8%8F-speech-providers) · [Development](#%EF%B8%8F-development) · [Troubleshooting](#-troubleshooting) · [Docs](#%EF%B8%8F-documentation) · [فارسی](README.fa.md)
@@ -172,10 +172,26 @@ Overlay and hold-mode hotkey changes need a daemon restart; everything else appl
 
 | Provider | Needs | Offline | Streaming partials | Notes |
 |---|---|:-:|:-:|---|
-| `google_free` *(default)* | internet | ❌ | ❌ | Undocumented endpoint; **audio is sent to Google** |
-| `vosk` | `vosk` + model | ✅ | ✅ | Light and private; lower accuracy on mixed text |
-| `whisper` | `faster-whisper` | ✅ | ❌ | Most accurate offline; CPU or CUDA |
-| `google_cloud` | service-account key | ❌ | ❌ | Paid, optional |
+| `google_free` *(default)* | internet | ❌ | ✅ segmented | Undocumented endpoint; **audio is sent to Google** |
+| `vosk` | `vosk` + model | ✅ | ✅ native | Light and private; lower accuracy on mixed text |
+| `whisper` | `faster-whisper` | ✅ | ✅ segmented | Most accurate offline; CPU or CUDA |
+| `google_cloud` | service-account key | ❌ | ✅ segmented | Paid, optional |
+
+### Live text while you speak (streaming)
+
+Vosk streams natively. For the other providers VoiceType uses **segmented streaming**: your audio is cut at pauses and each
+sentence is sent *while you are still talking*, and the sentence in progress is refreshed every ~1.5 s. Text shows up in the overlay
+as you speak, and when you stop only the last short segment is left — so the final text lands almost instantly.
+
+```toml
+[stt]
+streaming = true                 # false = classic batch mode (send everything at the end)
+stream_interim_seconds = 1.5     # refresh the sentence in progress; 0 = only at pauses
+stream_pause_seconds = 0.6       # silence that ends a sentence
+```
+
+Trade-off: more (short) requests to Google — set `stream_interim_seconds = 0` to send only at pauses, or `streaming = false` if you hit rate limits.
+Failed segments are retried at the end, and a recording whose speech couldn't be detected is transcribed whole, so streaming never loses audio.
 
 Compare them on your own voice: record the 50-sentence corpus and run the benchmark ([docs/benchmarks.md](docs/benchmarks.md)).
 

@@ -27,6 +27,7 @@ from .stt.base import (
     STTResult,
     STTUnintelligibleError,
 )
+from .stt.segmenting import SegmentedStream
 
 log = get_logger("dispatcher")
 
@@ -273,16 +274,30 @@ class Dispatcher:
     # ------------------------------------------------------------------ streaming
     def _open_stream_if_supported(self) -> None:
         backend = self._c.backend
-        if not backend.streaming:
-            return
-        stream = backend.open_stream()
+        stt = self._c.config.stt
+        show_partial = self._c.config.overlay.show_partial_text
+        session = self._session
+
+        def on_update(text: str) -> None:  # called by the segment worker as soon as new text is ready
+            if show_partial and session == self._session and self._state is State.LISTENING:
+                self.overlay.set_partial(text)
+
+        stream = backend.open_stream() if backend.streaming else None  # native (Vosk)
+        if stream is None and stt.streaming:
+            # Batch provider (Google, Whisper): stream by cutting the audio at pauses.
+            stream = SegmentedStream(
+                backend,
+                interim_seconds=stt.stream_interim_seconds,
+                pause_seconds=stt.stream_pause_seconds,
+                max_segment_seconds=stt.stream_max_segment_seconds,
+                cancel=self._cancel,
+                on_update=on_update,
+            )
         if stream is None:
             return
         self._stream = stream
         q: queue.Queue[bytes | None] = queue.Queue()
         self._stream_q = q
-        show_partial = self._c.config.overlay.show_partial_text
-        session = self._session
 
         def pump() -> None:
             last = ""
@@ -305,6 +320,11 @@ class Dispatcher:
     def _abort_stream(self) -> None:
         if self._stream_q is not None:
             self._stream_q.put(None)
+        if self._stream is not None:
+            try:
+                self._stream.abort()
+            except Exception:  # noqa: BLE001
+                log.exception("stream abort failed")
         self._stream = self._stream_q = None
 
     # ------------------------------------------------------------------ worker

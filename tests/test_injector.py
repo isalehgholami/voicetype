@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import time
 
 import pytest
@@ -185,6 +186,7 @@ def _write_fake_tool(path, body):
     path.chmod(0o755)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="needs os.fork and a POSIX shell script")
 def test_wl_copy_background_daemon_does_not_block_injection(tmp_path, monkeypatch):
     """Regression: a real wl-copy daemon holds stdout/stderr open for the whole session.
 
