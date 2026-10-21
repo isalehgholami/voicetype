@@ -14,6 +14,7 @@ from voicetype.postprocess import Pipeline
 from voicetype.translate import (
     GoogleTranslator,
     build_translator,
+    language_label,
     resolve_language,
     translate_stage,
 )
@@ -85,6 +86,31 @@ def test_resolve_language_rejects_the_unknown():
         resolve_language("klingon", tables=TABLES)
     with pytest.raises(ConfigError, match="translate.language"):
         resolve_language("", tables=TABLES)
+
+
+def test_the_language_label_is_the_name_of_the_language():
+    assert language_label("de", tables=TABLES) == "GERMAN"
+    assert language_label("en", tables=TABLES) == "ENGLISH"
+    assert language_label("fa", tables=TABLES) == "PERSIAN"
+
+
+def test_the_language_label_falls_back_to_the_code():
+    assert language_label("xx", tables=TABLES) == "XX"
+    assert language_label("", tables=TABLES) == ""
+
+
+def test_the_language_label_of_a_regional_code():
+    assert language_label("de-DE", tables=TABLES) == "GERMAN"
+
+
+def test_the_translator_carries_the_name_of_its_language():
+    translator = GoogleTranslator("de", client_factory=lambda: SimpleNamespace())
+    try:
+        # the tables of py-googletrans are optional: without them the code
+        # itself is the best label there is
+        assert translator.label in ("GERMAN", "DE")
+    finally:
+        translator.close()
 
 
 def test_build_translator_is_none_when_disabled():

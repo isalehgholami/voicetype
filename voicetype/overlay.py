@@ -1,9 +1,15 @@
-"""GTK4 + gtk4-layer-shell overlay (docs/adr/0003) with hyprwhspr's visual language.
+"""GTK4 + gtk4-layer-shell overlay (docs/adr/0003) with the HUD of ADR-0008.
 
-The rendering layer was ported from hyprwhspr's ``lib/mic_osd``: a transparent
-layer-shell window, a state-driven visualization (pill, waveform or VU meter)
-and a word-by-word live transcript drawn with Pango so Persian and Arabic
-shape and reorder correctly.
+The overlay is one floating card: a status row, the text that matters and a
+slim waveform.  It is a display, not an application — there is no button, no
+menu and no gesture in it, and nothing in it drives the application.  The
+states it shows come from the dispatcher: listening, transcribing,
+translating, finished, idle and failed.
+
+The card has a **fixed size**.  It never resizes while the user talks: the
+text lives in a fixed box inside the card and rolls through it — what does
+not fit scrolls, and a text that is replaced rolls out while its successor
+rolls in.
 
 ``gi`` and ``cairo`` are imported lazily — the module must stay importable on
 a machine without GTK (ADR-0001: "the core is free of heavy dependencies and
@@ -22,47 +28,55 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .config import DEFAULT_FONT_SIZE, OverlayConfig, resolve_font_family, resolve_font_size
 from .dispatcher import NullOverlay, Overlay
 from .log import get_logger
-from .text import LTR, RTL, word_directions
-from .ui.animations import FadeEnvelope, VisualizerState
+from .ui.animations import FadeEnvelope
 from .ui.easing import clamp
+from .ui.hud import (
+    ColorTween,
+    Crossfade,
+    HudContent,
+    HudMeasures,
+    HudMetrics,
+    HudState,
+    TextTicker,
+    Waveform,
+    draw_card,
+    draw_waveform,
+    hud_color,
+    hud_font_sizes,
+    hud_label,
+    hud_layout,
+    inner_surface,
+    rounded_rect,
+)
 from .ui.sounds import SoundPlayer
 from .ui.theme import Palette, Theme, ThemeWatcher, hex_to_rgba
 from .ui.transcript import TranscriptAnimator, TranscriptConfig
-
-if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
-    from .ui.visualizations.base import BaseVisualization
 
 log = get_logger("overlay")
 
 FRAME_MS = 16
 LEVEL_SMOOTHING = 0.35
 
-#: How long the success state stays on screen before the overlay hides itself.
+#: How long the finished state stays on screen before the overlay hides itself.
 SUCCESS_HIDE_MS = 1200
+
+#: A finished translation gets longer: the sentence has to be readable.
+TRANSLATION_HIDE_MS = 2200
 
 #: The G5 budget for the overlay to disappear after the user stops talking
 #: (docs/VoiceType-Architecture.md).  The default ``fade_ms`` (140) fits.
 HIDE_BUDGET_MS = 300
 
-#: How many recent level values are kept to synthesise a waveform.
+#: How many recent level values are kept to drive the waveform.
 LEVEL_BUFFER_SIZE = 64
 
-#: The number of buckets in the synthesised pseudo-waveform.
-WAVEFORM_BUCKETS = 32
-
-#: The status label is drawn at this share of the main text: the transcript
-#: carries the words, the label only the state.
-STATUS_FONT_SCALE = 0.7
-
-#: The overlay's text is bigger than the system's own font: the OSD is read
-#: at a glance, and a system size of nine or eleven points is too small for
-#: it.  A configured ``overlay.font_size`` wins over this.
-SYSTEM_FONT_SCALE = 1.6
+#: The status labels are drawn at this share of the main text.
+STATUS_FONT_SCALE = 0.72
 
 #: The font size used when the desktop names no size of its own.
 FALLBACK_FONT_SIZE = 11.0
@@ -72,43 +86,26 @@ FALLBACK_FONT_SIZE = 11.0
 FALLBACK_ASCENT = 1.2
 FALLBACK_DESCENT = 0.4
 
-#: Maps an overlay mode onto the visualizer state it drives.
-MODE_TO_STATE: dict[str, str] = {
-    "listening": "recording",
-    "processing": "processing",
-    "error": "error",
-    # A warning is a static amber notice, not a recording: it gets the paused
-    # state, which is flat and does not pretend the microphone is live.
-    "warning": "paused",
-    "success": "success",
+#: How far the status label's letters are spread out, in em.
+LETTER_SPACING = 0.09
+
+#: The overlay's modes and the HUD state each of them shows.  The finished
+#: state is TRANSLATED when the result carries a language and DONE when it
+#: does not.
+MODE_TO_STATE: dict[str, HudState] = {
+    "listening": HudState.LISTENING,
+    "processing": HudState.TRANSCRIBING,
+    "translating": HudState.TRANSLATING,
+    "success": HudState.TRANSLATED,
+    "error": HudState.ERROR,
+    "warning": HudState.NOTICE,
+    "hidden": HudState.READY,
 }
 
 #: The cue played for a mode change (see :func:`mode_sound`).
 SOUND_UP = "up"
 SOUND_DOWN = "down"
 SOUND_ERROR = "error"
-
-#: The status labels shown when there is no live transcript to draw.
-STATUS_TEXT: dict[str, str] = {"listening": "listening", "processing": "processing"}
-
-#: ``overlay.position`` → the vertical layer-shell edge the surface is anchored to.
-POSITION_TO_EDGE: dict[str, str] = {
-    "top": "top",
-    "center": "top",  # "center" used to be ignored entirely — see resolve_anchors()
-    "bottom": "bottom",
-}
-
-#: ``overlay.anchor_horizontal`` → the horizontal layer-shell edge.
-HORIZONTAL_TO_EDGE: dict[str, str] = {"left": "left", "right": "right"}
-
-#: Which palette colour the status label uses in each mode.
-MODE_TO_COLOR: dict[str, str] = {
-    "listening": "text",
-    "processing": "processing",
-    "error": "error",
-    "warning": "paused",
-    "success": "success",
-}
 
 #: The transparency rule hyprwhspr installs on its OSD window.
 TRANSPARENCY_CSS = """
@@ -172,6 +169,17 @@ def resolve_anchors(
     return Anchors(tuple(edges), margins)
 
 
+#: ``overlay.position`` → the vertical layer-shell edge the surface is anchored to.
+POSITION_TO_EDGE: dict[str, str] = {
+    "top": "top",
+    "center": "top",  # "center" used to be ignored entirely — see resolve_anchors()
+    "bottom": "bottom",
+}
+
+#: ``overlay.anchor_horizontal`` → the horizontal layer-shell edge.
+HORIZONTAL_TO_EDGE: dict[str, str] = {"left": "left", "right": "right"}
+
+
 def resolve_accent(palette: Palette, accent: str) -> tuple:
     """Return the accent colour, honouring the ``overlay.accent`` override.
 
@@ -188,24 +196,17 @@ def resolve_accent(palette: Palette, accent: str) -> tuple:
         return palette.accent
 
 
-def status_text_for(mode: str, message: str = "") -> str:
-    """The label shown for ``mode`` when there is no live transcript.
+def status_text_for(mode: str) -> str:
+    """The status label the card shows for ``mode``.
 
-    Every label is lower case: the overlay speaks in one voice.
+    The labels are upper case: they are a whisper, not a headline.  The text
+    the card carries — the speech, the translation, a message — keeps the
+    case it was written in.
     """
-    if mode in ("error", "warning", "success"):
-        return display_text(message)
-    return STATUS_TEXT.get(mode, "")
-
-
-def display_text(text: str) -> str:
-    """The overlay's text style: everything the user reads is lower case."""
-    return str(text or "").lower()
-
-
-def transcript_words(words: Sequence[str]) -> list[str]:
-    """The live transcript's words as they are drawn (lower case)."""
-    return [display_text(word) for word in words]
+    state = MODE_TO_STATE.get(mode)
+    if state is None:
+        return ""
+    return hud_label(state)
 
 
 def mode_sound(previous: str, mode: str) -> str | None:
@@ -244,318 +245,12 @@ def theme_file(name: str) -> Path | None:
     return None
 
 
-def status_color(palette: Palette, mode: str) -> tuple:
-    """The palette colour the status label uses in ``mode``."""
-    return getattr(palette, MODE_TO_COLOR.get(mode, "text"), palette.text)
-
-
-def synthesize_samples(history: Sequence[float], count: int = WAVEFORM_BUCKETS) -> list[float]:
-    """Turn a history of level values into a pseudo-waveform.
-
-    The ``Overlay`` protocol only carries a scalar level, so the waveform
-    visualization — which wants a *history* of amplitudes — is fed the recent
-    levels instead of real PCM.  It is an approximation of a waveform, not a
-    faithful one; the bar heights are what carry the meaning anyway.
-    """
-    if count <= 0:
-        return []
-    values = [float(v) for v in history][-count:]
-    if not values:
-        return [0.0] * count
-    if len(values) < count:
-        values = [0.0] * (count - len(values)) + values
-    return values
-
-
-def word_positions(
-    widths: Sequence[float],
-    space: float,
-    area_width: float,
-    directions: Sequence[str] | None = None,
-    base: str = LTR,
-) -> list[float]:
-    """The left edge of every word, laid out centred in ``area_width``.
-
-    ``directions`` gives the direction of every word ("ltr" or "rtl"); when it
-    is omitted every word counts as left-to-right.  Neighbouring words of the
-    same direction form a run: a right-to-left run is laid out from the right,
-    a left-to-right run from the left, and the runs follow the direction of
-    the paragraph (``base``) — from the right for a Persian or Arabic
-    transcript.
-
-    That is what the bidirectional algorithm does with "من با Python code
-    کردم": the two English words stay in their own order, and the Persian
-    words keep theirs.
-    """
-    if not widths:
-        return []
-    count = len(widths)
-    if directions is None:
-        directions = [LTR] * count
-
-    # Group the words into runs of the same direction.
-    runs: list[tuple[str, list[int]]] = []
-    for index, direction in enumerate(directions):
-        if runs and runs[-1][0] == direction:
-            runs[-1][1].append(index)
-        else:
-            runs.append((direction, [index]))
-
-    # The runs are ordered like the paragraph: in a right-to-left paragraph
-    # the first run of the text is the rightmost one.
-    if base == RTL:
-        runs = list(reversed(runs))
-
-    total = sum(widths) + space * max(0, count - 1)
-    cursor = (area_width - total) / 2.0
-    positions = [0.0] * count
-    for direction, indices in runs:
-        run_width = sum(widths[index] for index in indices) + space * (len(indices) - 1)
-        if direction == RTL:
-            # the first word of the run is flush with its right edge
-            x = cursor + run_width
-            for index in indices:
-                x -= widths[index]
-                positions[index] = x
-                x -= space
-        else:
-            x = cursor
-            for index in indices:
-                positions[index] = x
-                x += widths[index] + space
-        cursor += run_width + space
-    return positions
-
-
-def total_width(entries: Sequence[tuple[object, float]], space: float) -> float:
-    """The width of a laid-out word list, including the spaces between words."""
-    if not entries:
-        return 0.0
-    return sum(width for _, width in entries) + space * max(0, len(entries) - 1)
-
-
-def preview_height(
-    pill_height: float,
-    offset_y: float,
-    size: float,
-    metrics: tuple[float, float],
-) -> float:
-    """The surface height a text of ``size`` points needs above the pill.
-
-    The live transcript is painted above the pill, so a large font needs a
-    taller surface: the words would otherwise be clipped by the top edge.
-    """
-    ascent, descent = metrics
-    return pill_height + 4.0 + offset_y + (ascent + descent) * size
-
-
-def fitting_size(size: float, ascent: float, baseline: float) -> float:
-    """The biggest size whose ascent still fits above ``baseline``.
-
-    The text is drawn just above the pill, so a font that is too tall for
-    the space above it would be clipped by the surface.
-    """
-    if ascent <= 0.0 or baseline <= 0.0:
-        return size
-    return min(size, baseline / ascent)
-
-
-def scaled_font_size(size: float, system_size: float) -> float:
-    """The point size the main text is drawn with.
-
-    A configured size wins.  Without one the system's own size is scaled up:
-    the OSD is read at a glance, and a system size of nine or eleven points
-    is too small for it.
-    """
-    return size if size > 0.0 else system_size * SYSTEM_FONT_SCALE
-
-
-def system_font() -> tuple[str, float]:
-    """The desktop's own font: the family and the size, in points.
-
-    The family and the size come from the desktop settings, so the overlay
-    looks like the rest of the system.  Without a display they cannot be
-    read: the family stays empty (Pango's default) and the size falls back.
-    """
-    try:
-        import gi
-
-        gi.require_version("Gtk", "4.0")
-        gi.require_version("Pango", "1.0")
-        from gi.repository import Gtk, Pango
-
-        settings = Gtk.Settings.get_default()
-        name = settings.get_property("gtk-font-name") if settings is not None else ""
-        description = Pango.FontDescription(str(name or ""))
-        family = str(description.get_family() or "")
-        size = float(description.get_size()) / float(Pango.SCALE)
-        return (family, size if size > 0.0 else FALLBACK_FONT_SIZE)
-    except Exception:  # noqa: BLE001 - the desktop font is a nicety
-        log.debug("the system font could not be read", exc_info=True)
-        return ("", FALLBACK_FONT_SIZE)
-
-
-def resolve_overlay_font(cfg: OverlayConfig) -> tuple[str, float]:
-    """The font family and the point size the overlay draws with.
-
-    This is what ``voicetype doctor`` reports: the configured family and
-    size, or the system's own font.
-    """
-    settings = resolve_settings(cfg)
-    family, size = settings.font_family, settings.font_size
-    if not family or size <= 0.0:
-        system_family, system_size = system_font()
-        family = family or system_family
-        size = scaled_font_size(size, system_size)
-    return (family, size)
-
-
-def install_transparency_css(Gtk, Gdk) -> None:
-    """Make the overlay window's surface transparent (once per process).
-
-    A themed desktop's ``~/.config/gtk-4.0/gtk.css`` paints an opaque
-    window colour at ``STYLE_PROVIDER_PRIORITY_USER``.  The overlay's
-    transparency rule has to outrank it, or the theme's colour is painted as
-    an opaque slab behind the pill (hyprwhspr issue #248).
-    """
-    global _transparency_provider
-
-    if _transparency_provider is not None:
-        return
-    display = Gdk.Display.get_default()
-    if display is None:
-        return
-    provider = Gtk.CssProvider()
-    provider.load_from_string(TRANSPARENCY_CSS)
-    Gtk.StyleContext.add_provider_for_display(
-        display,
-        provider,
-        Gtk.STYLE_PROVIDER_PRIORITY_USER + 1,
-    )
-    _transparency_provider = provider
-
-
-def preload_layer_shell() -> str | None:
-    """Load libgtk4-layer-shell *before* libwayland so it can bind zwlr_layer_shell_v1.
-
-    gtk4-layer-shell interposes libwayland symbols to grab the layer-shell global when the
-    display is opened. If GDK (and with it libwayland) is loaded first, the global is never
-    bound and every window fails with "Failed to initialize layer surface ... may have been
-    linked after libwayland". See gtk4-layer-shell's linking.md.
-    """
-    import ctypes
-    import ctypes.util
-
-    candidates = [
-        ctypes.util.find_library("gtk4-layer-shell"),
-        "libgtk4-layer-shell.so",
-        "/usr/lib/libgtk4-layer-shell.so",
-        "/usr/lib64/libgtk4-layer-shell.so",
-        "/usr/local/lib/libgtk4-layer-shell.so",
-    ]
-    for cand in candidates:
-        if not cand:
-            continue
-        try:
-            ctypes.CDLL(cand, mode=ctypes.RTLD_GLOBAL)
-            return cand
-        except OSError:
-            continue
-    return None
-
-
-def create_overlay(cfg: OverlayConfig) -> Overlay:
-    if not cfg.enabled:
-        return NullOverlay()
-    try:
-        preload_layer_shell()
-        overlay = GtkOverlay(cfg)
-    except Exception as e:  # noqa: BLE001 - missing gi / no layer-shell support
-        log.warning("GTK overlay unavailable (%s); running without overlay. Run `voicetype doctor`.", e)
-        return NullOverlay()
-    # The overlay owns a theme watcher and a GLib loop; both are released when
-    # the process goes away.
-    atexit.register(overlay.close)
-    return overlay
-
-
-def _create_visualization(style: str, palette: Palette) -> BaseVisualization:
-    """Build the visualization named by ``style``.
-
-    The import is deferred on purpose: the overlay module must import cleanly
-    even when the visualization package is unavailable.
-    """
-    from .ui.visualizations import create_visualization
-
-    return create_visualization(style, palette)
-
-
-@dataclass(frozen=True)
-class OverlaySettings:
-    """The configuration values the overlay paints with, resolved once."""
-
-    #: The ``overlay.theme`` value: a palette name or the path to a CSS file.
-    theme: str
-    #: The ``overlay.accent`` override ("" = the palette decides).
-    accent: str
-    #: The ``overlay.opacity`` factor applied to the card's alpha.
-    opacity: float
-    #: Whether the overlay animates at all (``overlay.animations``).
-    animated: bool
-    #: Whether the visualization reacts to the microphone.
-    audio_meter: bool
-    #: Whether the audible cues are played.
-    sounds: bool
-    #: The show/hide fade duration in milliseconds (0 = instant).
-    fade_ms: int
-    #: The font family the user configured (``overlay.font``); empty means
-    #: "the system's own font".
-    font_family: str
-    #: The point size of the main text the user configured
-    #: (``overlay.font_size``); zero means "the system's own font size".
-    font_size: float
-    #: The live transcript's settings.
-    transcript: TranscriptConfig
-
-
-def resolve_settings(cfg: OverlayConfig) -> OverlaySettings:
-    """Resolve the overlay's configuration into the values it paints with.
-
-    The master animation switch reaches three places: the show/hide fade
-    becomes instant, the transcript words stop animating and the state
-    envelopes stop pulsing.
-    """
-    animated = bool(getattr(cfg, "animations", True))
-    transcript = TranscriptConfig.from_overlay_config(cfg)
-    if not animated:
-        transcript = replace(
-            transcript,
-            enter_seconds=0.0,
-            exit_seconds=0.0,
-            stagger_seconds=0.0,
-        )
-    fade_ms = 0 if not animated else int(getattr(cfg, "fade_ms", 140))
-    font_size = resolve_font_size(getattr(cfg, "font_size", DEFAULT_FONT_SIZE))
-    return OverlaySettings(
-        theme=str(getattr(cfg, "theme", "dark") or "dark"),
-        accent=str(getattr(cfg, "accent", "") or ""),
-        opacity=clamp(float(getattr(cfg, "opacity", 0.86)), 0.0, 1.0),
-        animated=animated,
-        audio_meter=bool(getattr(cfg, "show_audio_meter", True)),
-        sounds=bool(getattr(cfg, "sounds", False)),
-        fade_ms=fade_ms,
-        font_family=resolve_font_family(getattr(cfg, "font", "")),
-        font_size=font_size,
-        transcript=transcript,
-    )
-
-
 def style_palette(palette: Palette, accent: str = "", opacity: float = 1.0) -> Palette:
     """Apply the accent override and the surface opacity to ``palette``.
 
     The opacity scales the alpha of the background colour, which is the card
-    the waveform and the VU meter fill; the palette's own alpha is kept, so
-    a translucent palette stays translucent.
+    the whole HUD is drawn on; the palette's own alpha is kept, so a
+    translucent palette stays translucent.
     """
     styled = replace(palette, accent=resolve_accent(palette, accent))
     background = styled.background
@@ -583,23 +278,23 @@ class GtkOverlay:
 
     The window is a transparent surface on the OVERLAY layer: it never takes
     focus, never reserves screen space and lets clicks through.  Its content
-    is painted by a :mod:`voicetype.ui.visualizations` implementation, with the
-    live transcript and the status label drawn on top with Pango.
+    is the floating card of :mod:`voicetype.ui.hud` — a status row, the text
+    that matters and the waveform — painted with Cairo and drawn with Pango.
 
     The configuration keys that shape the look are honoured here:
 
-    * ``overlay.opacity`` scales the alpha of the card the visualization is
-      drawn on.  The palette's ``background`` colour carries its own alpha,
-      so the setting multiplies it; the pill paints its own near-black body
-      and gets the same factor through the visualization's
-      ``surface_opacity``.
-    * ``overlay.show_audio_meter`` decides whether the visualization reacts to
-      the microphone at all.  With it off the level is treated as silence.
+    * ``overlay.opacity`` scales the alpha of the card.
+    * ``overlay.show_audio_meter`` decides whether the waveform reacts to the
+      microphone at all.  With it off the level is treated as silence.
     * ``overlay.animations`` is the master switch for motion: the show/hide
-      fade becomes instant, the state envelopes stop pulsing and the
-      transcript words appear without animating.
+      fade becomes instant, the state envelopes stop pulsing and the words
+      stop animating.  A desktop that asks for reduced motion is honoured
+      the same way.
     * ``overlay.sounds`` plays a short cue when the recording starts, stops
       or fails.
+    * ``overlay.width`` and ``overlay.height`` are the **fixed size** of the
+      card.  It does not grow with the text it holds: the text lives in a
+      fixed box inside the card and rolls through it.
     """
 
     def __init__(self, cfg: OverlayConfig) -> None:
@@ -616,16 +311,15 @@ class GtkOverlay:
         self._GLib: Any = None
         self._Pango: Any = None
         self._PangoCairo: Any = None
+        self._Gdk: Any = None
         self._win = None
         self._area = None
         self._loop = None
-        self._viz: BaseVisualization | None = None
         self._timer = 0
         self._success_timer = 0
         self._last_tick = time.monotonic()
 
         self._mode = "hidden"
-        self._text = ""
         self._level = 0.0
         self._levels: deque[float] = deque(maxlen=LEVEL_BUFFER_SIZE)
         self._samples: list[float] = []
@@ -635,7 +329,8 @@ class GtkOverlay:
         # then these are the values the user configured.
         self._font_family = self._settings.font_family
         self._font_size = self._settings.font_size
-        self._status_font_size = 0.0
+        self._status_font_size = self._settings.font_size * STATUS_FONT_SCALE
+        self._secondary_font_size = self._settings.font_size * 0.86
         #: The ascent and the descent of the font, per point; measured once.
         self._metrics: tuple[float, float] | None = None
         # The theme is kept as a live object, not just a resolved palette, so
@@ -650,6 +345,34 @@ class GtkOverlay:
         self._sounds: SoundPlayer | None = None
         self._sounds_lock = threading.Lock()
         self.palette = style_palette(self._theme.palette, self._accent, self._opacity)
+
+        # The card's own model: what it shows, what it is in the middle of
+        # showing, and how its bars move.
+        self._hud = HudMetrics()
+        self._state = HudState.READY
+        self._label = Crossfade(self._hud.transition)
+        #: The text box: a fixed window the text rolls through.
+        self._ticker = TextTicker(self._hud)
+        self._tint = ColorTween(self._hud.transition)
+        self._wave = Waveform(self._hud)
+        self._language = ""
+        #: The source of the translation, kept for the finished state.
+        self._source = ""
+        #: The live text the card currently shows.
+        self._live_text = ""
+        #: The opacity of every word of the live preview.
+        self._word_alphas: tuple[float, ...] = ()
+        #: The height of one line of the main text; measured once.
+        self._line_height = 0.0
+        #: The card's fixed size: it does not follow the text it holds.
+        self._card_width = float(cfg.width)
+        self._card_height = float(cfg.height)
+
+        # The surface follows the card: the size is measured while painting
+        # and eased into place by the frame loop.
+        self._size = (0, 0)
+        self._target_size = (0, 0)
+        self._size_ready = False
 
         # With the animations off the fade is instant: the overlay appears
         # and disappears without a transition.
@@ -681,10 +404,8 @@ class GtkOverlay:
         try:
             palette = style_palette(self._theme.reload(), self._accent, self._opacity)
             self.palette = palette
-            viz = self._viz
-            if viz is not None:
-                viz.set_palette(palette)
-                viz.set_surface_opacity(self._opacity)
+            # The state's colour follows the palette, so it is re-tinted.
+            self._tint.set(hud_color(palette, self._state))
             if self._area is not None:
                 self._area.queue_draw()
         except Exception:  # noqa: BLE001 - a failed reload keeps the old palette
@@ -703,26 +424,23 @@ class GtkOverlay:
 
     # ------------------------------------------------------------------ font
     def _resolve_font(self) -> None:
-        """Resolve the font every text of the overlay is drawn with.
+        """Resolve the font every text of the card is drawn with.
 
         With nothing configured the overlay follows the desktop's own font:
-        the family the settings ask for, and their size multiplied — the
-        OSD is read at a glance, and a system size of nine or eleven points
-        is too small for it.  A configured family or size wins, and the
-        status label keeps its share of the main text either way.
+        the family the settings ask for, and their size — the HUD is read
+        from a few centimetres away, but it is a compact card, so the size
+        the desktop asks for is the right one.  A configured family or size
+        wins, and the status label keeps its share of the main text either
+        way.
         """
         system_family, system_size = system_font()
         self._font_family = self._settings.font_family or system_family
-        self._font_size = scaled_font_size(self._settings.font_size, system_size)
-        self._status_font_size = self._font_size * STATUS_FONT_SCALE
-        # The live transcript draws with the very same font.
-        self._animator.config = replace(
-            self._animator.config,
-            font_family=self._font_family,
-            font_size=self._font_size,
-        )
+        primary, status, secondary = hud_font_sizes(self._settings.font_size, system_size)
+        self._font_size = primary
+        self._status_font_size = status
+        self._secondary_font_size = secondary
 
-    def _font_description(self, size: float):
+    def _font_description(self, size: float, medium: bool = False):
         """The Pango font description of the configured font.
 
         A part that is not known is left out of the description, so Pango
@@ -733,14 +451,18 @@ class GtkOverlay:
             parts.append(self._font_family)
         if size > 0.0:
             parts.append(f"{size:g}")
-        return self._Pango.FontDescription(" ".join(parts))
+        description = self._Pango.FontDescription(" ".join(parts))
+        if medium:
+            weight = getattr(self._Pango.Weight, "MEDIUM", None)
+            if weight is not None:
+                description.set_weight(weight)
+        return description
 
     def _font_metrics(self) -> tuple[float, float]:
         """The ascent and the descent of the font, per point of font size.
 
-        They decide how much room the text takes above the pill, so they are
-        measured from the font itself instead of being guessed.  The result
-        is cached: the font does not change while the overlay is alive.
+        The result is cached: the font does not change while the overlay is
+        alive.
         """
         if self._metrics is not None:
             return self._metrics
@@ -779,6 +501,7 @@ class GtkOverlay:
         self._GLib = GLib
         self._Pango = Pango
         self._PangoCairo = PangoCairo
+        self._Gdk = Gdk
         try:
             # gtk_init() aborts the process when no display can be opened, so
             # the check variant is used: a headless daemon must degrade to
@@ -794,30 +517,24 @@ class GtkOverlay:
 
             install_transparency_css(Gtk, Gdk)
 
-            # The font is resolved before anything is measured: the surface
-            # grows with it and every text is laid out with it.
+            # The font is resolved before anything is measured: the card grows
+            # with it and every text is laid out with it.
             self._resolve_font()
-
-            viz = _create_visualization(str(getattr(self.cfg, "style", "pill")), self.palette)
-            # the accent override (and any future palette change) reaches the
-            # visualization through its palette
-            viz.set_palette(self.palette)
-            # the card's opacity and the master animation switch are the
-            # visualization's own settings
-            viz.set_surface_opacity(self._opacity)
-            viz.set_animated(self._animated)
-            self._viz = viz
-
-            width, height = self._surface_size(viz)
+            self._apply_motion_settings()
 
             win = Gtk.Window()
             win.set_decorated(False)
             win.set_resizable(False)
-            win.set_default_size(width, height)
             # GTK gives every window the "background" style class, which paints
             # the theme's opaque window colour across the whole surface.
             win.remove_css_class("background")
             win.add_css_class("mic-osd-window")
+
+            width = int(self._card_width + self._hud.surface_margin * 2)
+            height = int(self._card_height + self._hud.surface_margin * 2)
+            win.set_default_size(width, height)
+            self._size = (width, height)
+            self._target_size = (width, height)
 
             area = Gtk.DrawingArea()
             area.set_content_width(width)
@@ -858,30 +575,31 @@ class GtkOverlay:
         self._ready.set()
         self._loop.run()
 
-    def _surface_size(self, viz) -> tuple[int, int]:
-        """The size of the drawing surface.
+    def _apply_motion_settings(self) -> None:
+        """Honour ``overlay.animations`` and the desktop's reduced motion.
 
-        The live transcript is painted above the pill, so a surface that is
-        too short for the pill's preview threshold is grown — otherwise the
-        text would land on top of the pill (hyprwhspr does the same).  A
-        large font grows the surface as well: the words need the room.
+        A desktop that asks for reduced motion gets the same treatment as a
+        user who switched the animations off: nothing moves, nothing blinks.
         """
-        width = int(self.cfg.width)
-        height = int(self.cfg.height)
-        if self._transcript_enabled:
-            threshold = int(getattr(viz, "PREVIEW_HEIGHT_THRESHOLD", 0) or 0)
-            if threshold:
-                height = max(height, threshold + 1)
-            height = max(height, int(math.ceil(self._preview_height(viz))))
-        return width, height
+        animated = self._animated and self._desktop_animations()
+        duration = self._hud.transition if animated else 0.0
+        for fade in (self._label,):
+            fade.duration = duration
+        self._ticker.duration = duration
+        self._tint.duration = duration
+        self._wave.animated = animated
 
-    def _preview_height(self, viz) -> float:
-        """The surface height the configured font needs above the pill."""
-        pill_h = float(getattr(viz, "PILL_HEIGHT", 0) or 0)
-        if pill_h <= 0.0:
-            return 0.0
-        offset = float(self._animator.config.offset_y)
-        return preview_height(pill_h, offset, self._font_size, self._font_metrics())
+    def _desktop_animations(self) -> bool:
+        """Whether the desktop wants animations (GTK's own switch)."""
+        try:
+            from gi.repository import Gtk
+
+            settings = Gtk.Settings.get_default()
+            if settings is None:
+                return True
+            return bool(settings.get_property("gtk-enable-animations"))
+        except Exception:  # noqa: BLE001 - the switch is a nicety
+            return True
 
     def _make_click_through(self) -> None:
         try:
@@ -900,7 +618,10 @@ class GtkOverlay:
         dt = min(0.25, max(0.0, now - self._last_tick))
         self._last_tick = now
 
-        self._feed_visualization(dt)
+        self._advance_waveform(dt)
+        self._sync_live_text()
+        self._ticker.advance(dt)
+        self._advance_size(dt)
 
         # The fade envelope is clock-driven: reading its value is what
         # advances it towards the target.
@@ -916,43 +637,77 @@ class GtkOverlay:
             return False
         return True
 
-    def _feed_visualization(self, dt: float) -> None:
-        """Advance the visualization with the current audio frame.
-
-        The state manager's phase is the animation clock.  The base
-        implementation advances it with a fixed 1/60 s step — which is exactly
-        this loop's frame interval — so that step is traded for the measured
-        delta.  Visualizations that drive the phase themselves are left
-        untouched.
-        """
-        viz = self._viz
-        if viz is None:
+    def _advance_waveform(self, dt: float) -> None:
+        """Move the waveform on: with the microphone, or with the work."""
+        state = self._state
+        if state == HudState.LISTENING and self._audio_meter:
+            with self._lock:
+                level = self._level
+                history = list(self._levels)
+            self._wave.update(state, level, history, dt)
             return
-        manager = viz.state_manager
-        level, samples = self._current_audio()
-        before = manager.animation_phase
-        viz.update(level, samples)
-        fixed_step = manager.PHASE_RATE / 60.0
-        advanced = (manager.animation_phase - before) % (2 * math.pi)
-        if abs(advanced - fixed_step) < 1e-6:
-            manager.update(dt)
-            manager.animation_phase = (manager.animation_phase - fixed_step) % (2 * math.pi)
+        self._wave.update(state, 0.0, None, dt)
 
-    def _current_audio(self) -> tuple[float, list[float]]:
-        """The audio this frame feeds into the visualization.
+    def _sync_live_text(self) -> None:
+        """Keep the card's live text in step with the animator.
 
-        With ``overlay.show_audio_meter`` off the microphone is ignored
-        altogether: the level is silence and no samples are handed over, so
-        the bars stay flat on the floor.
+        The animator owns the word window and the idle timeout: it knows when
+        a word was corrected and when the speaker stopped.  The card only
+        shows what the animator says — and a text that grows replaces the old
+        one in place, while a text that goes away rolls out of the box.
         """
-        if not self._audio_meter:
-            return meter_audio(False, 0.0, [])
-        with self._lock:
-            level = self._level
-            if self._samples:
-                return meter_audio(True, level, self._samples)
-            history = list(self._levels)
-        return meter_audio(True, level, synthesize_samples(history, WAVEFORM_BUCKETS))
+        if self._state not in (HudState.LISTENING, HudState.TRANSCRIBING):
+            self._word_alphas = ()
+            return
+        if not self._transcript_enabled:
+            self._word_alphas = ()
+            return
+        frame = self._animator.frame(time.monotonic())
+        words = " ".join(frame.current_words)
+        # The opacity of every word of the live preview: the words are drawn
+        # as one paragraph by Pango, so each of them gets its own opacity
+        # through a foreground attribute.
+        self._word_alphas = tuple(word.alpha for word in frame.words if word.source == "current")
+        if words == self._live_text:
+            return
+        self._live_text = words
+        if words:
+            # The live preview grows in place: it rolls with the words, and
+            # rolling it away would make it unreadable.
+            self._ticker.set(words, "", instant=True, live=True)
+        else:
+            self._ticker.set("", "")
+
+    def _advance_size(self, dt: float) -> None:
+        """Ease the surface towards the size the card asked for.
+
+        The card's size is measured while it is painted; the frame loop
+        carries the surface there, so a new word never snaps the card.
+        """
+        target = self._target_size
+        if not target[0] or not target[1]:
+            return
+        current = self._size
+        if current == target:
+            return
+        if not self._size_ready:
+            # The first size is the real one: there is nothing to ease from.
+            self._size_ready = True
+            self._size = target
+        else:
+            factor = 1.0 - math.exp(-dt / 0.06)
+            self._size = (
+                int(round(current[0] + (target[0] - current[0]) * factor)),
+                int(round(current[1] + (target[1] - current[1]) * factor)),
+            )
+        width, height = self._size
+        area = self._area
+        if area is not None:
+            area.set_content_width(width)
+            area.set_content_height(height)
+        win = self._win
+        if win is not None:
+            win.set_default_size(width, height)
 
     def _start_timer(self) -> None:
         if not self._timer:
@@ -960,7 +715,19 @@ class GtkOverlay:
             self._timer = self._GLib.timeout_add(FRAME_MS, self._tick)
 
     # ------------------------------------------------------------------ state
-    def _apply(self, mode: str, text: str | None = None) -> bool:
+    def _set_state(self, state: HudState, label: str = "", instant: bool = False) -> None:
+        """Switch the card to ``state`` (runs on the GTK thread).
+
+        An ``instant`` switch does not crossfade: a card that comes back
+        from the hidden state is fading in anyway, and a crossfade would
+        show the idle label next to the new one for a moment.
+        """
+        if state is not self._state:
+            self._state = state
+        self._label.set(label or hud_label(state), instant=instant)
+        self._tint.set(hud_color(self.palette, state))
+
+    def _apply(self, mode: str, text: str | None = None, language: str = "") -> bool:
         """Switch the overlay to ``mode`` (runs on the GTK thread)."""
         win = self._win
         if win is None:
@@ -968,21 +735,43 @@ class GtkOverlay:
         with self._lock:
             previous_mode = self._mode
             self._mode = mode
-            if text is not None:
-                self._text = text
-            elif mode in ("listening", "hidden"):
-                self._text = ""
 
-        viz = self._viz
-        was_recording = viz is not None and viz.state is VisualizerState.RECORDING
-        state = MODE_TO_STATE.get(mode)
-        if viz is not None and state is not None:
-            viz.set_state(state)
-        if mode == "hidden":
+        # A card that was hidden comes back with its new label right away:
+        # the fade-in is enough of a transition.
+        instant = previous_mode == "hidden"
+
+        if mode == "listening":
+            self._set_state(HudState.LISTENING, instant=instant)
+            self._language = ""
+            self._source = ""
+            self._wave.reset()
+            # A new recording starts from an empty card.
             self._animator.clear()
-        elif was_recording and viz is not None and viz.state is not VisualizerState.RECORDING:
-            # the live transcript belongs to the recording state only
+            self._live_text = ""
+            self._ticker.reset()
+        elif mode == "processing":
+            # The partial stays on the card: it is what was heard so far.
+            self._set_state(HudState.TRANSCRIBING, instant=instant)
+        elif mode == "translating":
+            # The source rolls into the box; the translation rolls in over it.
+            self._set_state(HudState.TRANSLATING, instant=instant)
+            self._source = text or ""
+            self._ticker.set("", self._source, instant=instant)
+        elif mode == "success":
+            self._set_state(HudState.TRANSLATED if language else HudState.DONE, instant=instant)
+            self._language = language
+            self._ticker.set(text or "", self._source, instant=instant)
+        elif mode == "error":
+            self._set_state(HudState.ERROR, instant=instant)
+            self._ticker.set(text or "", "", instant=instant)
+        elif mode == "warning":
+            self._set_state(HudState.NOTICE, instant=instant)
+            self._ticker.set(text or "", "", instant=instant)
+        else:  # hidden
+            self._set_state(HudState.READY)
             self._animator.clear()
+            self._live_text = ""
+            self._ticker.reset()
 
         if mode == "hidden":
             # the window is only taken down once the fade has settled
@@ -993,7 +782,7 @@ class GtkOverlay:
                 win.present()
                 self._make_click_through()
             if mode == "success":
-                self._schedule_success_hide()
+                self._schedule_success_hide(bool(language))
 
         self._play_mode_sound(previous_mode, mode)
         self._start_timer()
@@ -1024,10 +813,11 @@ class GtkOverlay:
             return
         player.play(name)
 
-    def _schedule_success_hide(self) -> None:
+    def _schedule_success_hide(self, translated: bool = False) -> None:
         if self._success_timer:
             self._GLib.source_remove(self._success_timer)
-        self._success_timer = self._GLib.timeout_add(SUCCESS_HIDE_MS, self._success_hide)
+        delay = TRANSLATION_HIDE_MS if translated else SUCCESS_HIDE_MS
+        self._success_timer = self._GLib.timeout_add(delay, self._success_hide)
 
     def _success_hide(self) -> bool:
         self._success_timer = 0
@@ -1036,128 +826,249 @@ class GtkOverlay:
 
     # ------------------------------------------------------------------ painting
     def _draw(self, area, cr, width, height) -> None:
-        viz = self._viz
-        if viz is None:
-            return
         alpha = self._fade.value
         # Everything is painted into a group so the show/hide fade applies to
-        # the visualization and the text alike.
+        # the card and the text alike.
         cr.push_group()
         try:
-            viz.draw_background(cr, width, height)
-            viz.draw(cr, width, height)
-            self._draw_text(cr, width, height)
+            self._draw_hud(cr, width, height)
         finally:
             cr.pop_group_to_source()
         cr.paint_with_alpha(alpha)
 
-    def _draw_text(self, cr, width: int, height: int) -> None:
-        """Draw the live transcript, or the status label when there is none."""
-        if self._mode == "listening" and self._draw_transcript(cr, width, height):
-            return
-        label = status_text_for(self._mode, self._text)
-        if not label:
-            return
-        self._draw_label(cr, width, height, label, status_color(self.palette, self._mode))
+    def _draw_hud(self, cr, width: int, height: int) -> None:
+        """Paint the card: its frame, its status row, its text box and its bars."""
+        content = self._hud_content()
 
-    def _draw_label(self, cr, width: int, height: int, text: str, color) -> None:
-        """Draw a single-line status label with Pango (bidi-correct)."""
-        available = max(0.0, float(width) - 20.0)
-        if available <= 0.0:
-            return
-        baseline = self._text_baseline(width, height)
-        size = fitting_size(self._status_font_size, self._font_metrics()[0], baseline)
-        layout = self._layout(cr, text, size)
-        layout.set_width(int(available * self._Pango.SCALE))
-        layout.set_ellipsize(self._Pango.EllipsizeMode.END)
-        layout.set_alignment(self._Pango.Alignment.CENTER)
-        x = (float(width) - available) / 2.0
-        y = baseline + self._baseline_offset(layout)
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.55)
-        cr.move_to(x, y + 2.0)
-        self._PangoCairo.show_layout(cr, layout)
-        cr.set_source_rgba(color[0], color[1], color[2], 0.97)
-        cr.move_to(x, y)
-        self._PangoCairo.show_layout(cr, layout)
-
-    def _draw_transcript(self, cr, width: int, height: int) -> bool:
-        """Draw the live transcript above the pill. Returns ``True`` when drawn."""
-        viz = self._viz
-        if viz is None or not self._transcript_enabled:
-            return False
-        if viz.state is not VisualizerState.RECORDING:
-            return False
-        frame = self._animator.frame(time.monotonic())
-        if not frame.words:
-            return False
-
-        config = self._animator.config
-        size = float(config.font_size)
-        max_width = min(config.max_width, max(0.0, float(width) - 20.0))
-        # A Persian or Arabic transcript is laid out from the right; the
-        # direction of the paragraph comes from the transcript itself.
-        base = frame.direction
-        previous_directions = word_directions(frame.previous_words, base)
-        current_directions = word_directions(frame.current_words, base)
-
-        # The words sit just above the pill: a font that does not fit the
-        # space above it is shrunk, so a large ``overlay.font_size`` never
-        # clips the text.
-        baseline = self._text_baseline(width, height)
-        size = fitting_size(size, self._font_metrics()[0], baseline)
-
-        space = self._measure(cr, " ", size)
-        previous = self._layout_words(cr, frame.previous_words, size)
-        current = self._layout_words(cr, frame.current_words, size)
-        widest = max(total_width(previous, space), total_width(current, space))
-        if max_width > 0.0 and widest > max_width:
-            size = max(8.0, size * max_width / widest)
-            space = self._measure(cr, " ", size)
-            previous = self._layout_words(cr, frame.previous_words, size)
-            current = self._layout_words(cr, frame.current_words, size)
-
-        previous_positions = word_positions(
-            [w for _, w in previous], space, width, previous_directions, base
-        )
-        current_positions = word_positions(
-            [w for _, w in current], space, width, current_directions, base
+        # The card has a fixed size: only the status row is measured, because
+        # only the status row decides where the language chip sits.  The
+        # texts are wrapped inside the card instead of deciding how wide it
+        # is — that is what keeps the card from resizing while the user
+        # talks.
+        measures = self._measure_hud(cr, content)
+        frame = hud_layout(
+            content,
+            measures,
+            self._hud,
+            width=self._card_width,
+            height=self._card_height,
+            line_height=self._measure_line_height(cr),
         )
 
-        for word in frame.words:
-            if word.alpha <= 0.01:
-                continue
-            if word.source == "previous":
-                if word.index >= len(previous_positions):
-                    continue
-                x = previous_positions[word.index]
-                layout = previous[word.index][0]
-            else:
-                if word.index >= len(current_positions):
-                    continue
-                x = current_positions[word.index]
-                layout = current[word.index][0]
-                if word.matched_from is not None and word.matched_from < len(previous_positions):
-                    # a word that survived the diff slides to its new position
-                    old_x = previous_positions[word.matched_from]
-                    x = old_x + (x - old_x) * word.layout_progress
-            y = baseline + word.y_offset + self._baseline_offset(layout)
+        margin = self._hud.surface_margin
+        draw_card(cr, margin, margin, frame.width, frame.height, self._hud.radius, self.palette, 1.0)
 
-            # A restrained shadow keeps the text readable over bright windows
-            # without introducing a visible badge or background rectangle.
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.55 * word.alpha)
-            cr.move_to(x, y + 2.0)
-            self._PangoCairo.show_layout(cr, layout)
+        self._draw_status(cr, margin, frame)
+        self._draw_texts(cr, margin, frame)
+        self._draw_wave(cr, margin, frame)
 
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.97 * word.alpha)
-            cr.move_to(x, y)
-            self._PangoCairo.show_layout(cr, layout)
-        return True
+        # The surface follows the card: the size the card needs is handed to
+        # the frame loop, which eases the window towards it.
+        self._target_size = (
+            int(round(frame.width + margin * 2)),
+            int(round(frame.height + margin * 2)),
+        )
 
+    def _hud_content(self) -> HudContent:
+        """What the card shows right now."""
+        primary, secondary = self._ticker.current
+        return HudContent(
+            state=self._state,
+            primary=primary,
+            secondary=secondary,
+            language=self._language,
+            label=str(self._label.current or ""),
+        )
+
+    def _live_word_alphas(self) -> tuple[float, ...]:
+        """The opacity of every word of the live preview.
+
+        The words are painted by Pango as one paragraph — so they wrap and
+        reorder the way the language wants — and each of them gets its own
+        opacity through a foreground attribute.
+        """
+        return self._word_alphas
+
+    def _measure_hud(self, cr, content: HudContent) -> HudMeasures:
+        """Measure the status row (Pango is the only one who knows the font).
+
+        Only the status row is measured: the card has a fixed width, so the
+        texts are wrapped inside it instead of deciding how wide it is.
+        """
+        measures = HudMeasures()
+        if content.label:
+            layout = self._status_layout(cr, content.label)
+            measures.status_width = self._layout_width(layout)
+            measures.status_height = self._layout_height(layout)
+        if content.language:
+            layout = self._status_layout(cr, content.language)
+            measures.language_width = self._layout_width(layout)
+        return measures
+
+    def _measure_line_height(self, cr) -> float:
+        """The height of one line of the card's main text.
+
+        It is measured once: the font does not change while the overlay is
+        alive, and the card only needs it to know how much room its text box
+        has to keep.
+        """
+        cached = getattr(self, "_line_height", 0.0)
+        if cached:
+            return cached
+        try:
+            height = self._layout_height(self._layout(cr, "Ag", self._font_size))
+        except Exception:  # noqa: BLE001 - the measurement is a nicety
+            height = 0.0
+        self._line_height = height
+        return height
+
+    def _draw_status(self, cr, margin: float, frame) -> None:
+        """Draw the status dot, its label and the language chip."""
+        color = self._tint.value()
+        old_alpha, new_alpha = self._label.alphas()
+        if new_alpha > 0.01:
+            cr.set_source_rgba(color[0], color[1], color[2], 0.95 * new_alpha)
+            cr.arc(
+                margin + frame.dot_center[0],
+                margin + frame.dot_center[1],
+                self._hud.dot_radius,
+                0,
+                2 * math.pi,
+            )
+            cr.fill()
+
+        previous = self._label.previous
+        current = self._label.current
+        if previous and old_alpha > 0.01:
+            layout = self._status_layout(cr, str(previous))
+            self._show(cr, layout, margin + frame.label_x, margin + frame.label_y, color, 0.8 * old_alpha)
+        if current and new_alpha > 0.01:
+            layout = self._status_layout(cr, str(current))
+            self._show(cr, layout, margin + frame.label_x, margin + frame.label_y, color, 0.9 * new_alpha)
+
+        self._draw_language(cr, margin, frame)
+
+    def _draw_language(self, cr, margin: float, frame) -> None:
+        """Draw the chip that names the language of the translation.
+
+        The chip is a recess in the card — the card's own colour, pushed
+        towards black — with the name of the language in the quiet text
+        colour.  It is the smallest thing on the card on purpose: the
+        translation is the news, the language is only a label.
+        """
+        language = self._language
+        if not language:
+            return
+        chip_x, chip_y, chip_width, chip_height = frame.language
+        if chip_width <= 0.0:
+            return
+        rounded_rect(
+            cr,
+            margin + chip_x,
+            margin + chip_y,
+            chip_width,
+            chip_height,
+            chip_height / 2.0,
+        )
+        cr.set_source_rgba(*inner_surface(self.palette))
+        cr.fill()
+
+        layout = self._status_layout(cr, language)
+        text_x = margin + chip_x + self._hud.language_padding
+        text_y = margin + chip_y + self._hud.language_padding_y
+        self._show(cr, layout, text_x, text_y, self.palette.text_dim, 0.95)
+
+    def _draw_texts(self, cr, margin: float, frame) -> None:
+        """Draw the card's text box: the text that rolls through it.
+
+        The box is a window of a fixed size.  What does not fit in it is
+        clipped away, and the box scrolls to the newest line — so a sentence
+        that grows rolls instead of pushing the card around.  A text that is
+        replaced does not cross-fade: the old one rolls out of the box and
+        the new one rolls in.
+        """
+        box_x, box_y, box_w, box_h = frame.text_box
+        if box_w <= 0.0 or box_h <= 0.0:
+            return
+        ticker = self._ticker
+        roll = ticker.progress
+        # One roll carries the text a whole box: the old text leaves the
+        # window upwards while the new one comes in from below it.
+        ticker.set_roll(box_h)
+
+        cr.save()
+        cr.rectangle(margin + box_x, margin + box_y, box_w, box_h)
+        cr.clip()
+
+        previous = ticker.previous
+        if previous is not None and roll < 1.0:
+            y = margin + box_y - ticker.roll * roll - ticker.previous_scroll
+            self._draw_document(cr, margin, box_x, y, previous, 1.0 - roll)
+
+        y = margin + box_y - ticker.scroll + ticker.roll * (1.0 - roll)
+        height = self._draw_document(cr, margin, box_x, y, ticker.current, roll)
+        cr.restore()
+
+        # How much of the document does not fit into the box: the box scrolls
+        # by that much, so the newest line is the one that stays in sight.
+        ticker.set_overflow(height - box_h)
+
+    def _draw_document(
+        self,
+        cr,
+        margin: float,
+        box_x: float,
+        y: float,
+        document: tuple[str, str],
+        alpha: float,
+    ) -> float:
+        """Draw one document: the main text and the one below it.
+
+        Returns the height the document takes.
+        """
+        primary, secondary = document
+        height = 0.0
+        if primary:
+            layout = self._wrapped_layout(cr, primary, self._font_size)
+            self._apply_word_alphas(layout, primary, self._live_word_alphas(), alpha)
+            self._show(cr, layout, margin + box_x, y, self.palette.text, alpha)
+            height = self._layout_height(layout)
+        if secondary:
+            # The source sits below the main text — but when it is the only
+            # text on the card it starts at the top of the box, the way the
+            # main text always does.
+            gap = self._hud.text_gap if primary else 0.0
+            layout = self._wrapped_layout(cr, secondary, self._secondary_font_size)
+            self._show(
+                cr,
+                layout,
+                margin + box_x,
+                y + height + gap,
+                self.palette.text_dim,
+                alpha,
+            )
+            height += gap + self._layout_height(layout)
+        return height
+
+    def _draw_wave(self, cr, margin: float, frame) -> None:
+        """Draw the waveform."""
+        if not frame.has_wave:
+            return
+        color = self.palette.accent
+        draw_waveform(
+            cr,
+            (margin + frame.wave[0], margin + frame.wave[1], frame.wave[2], frame.wave[3]),
+            self._wave.heights,
+            color,
+            self._hud,
+        )
+
+    # ------------------------------------------------------------------ text
     def _layout(self, cr, text: str, size: float):
         """A Pango layout for ``text`` at ``size`` points.
 
-        The whole overlay is drawn with one font — the configured
-        ``overlay.font`` — so the labels, the messages and the live transcript
+        The whole card is drawn with one font — the configured
+        ``overlay.font`` — so the label, the messages and the live preview
         all share the same face.
         """
         layout = self._PangoCairo.create_layout(cr)
@@ -1165,46 +1076,117 @@ class GtkOverlay:
         layout.set_text(text, -1)
         return layout
 
-    def _baseline_offset(self, layout) -> float:
-        """How far the layout's origin sits *above* its first baseline.
+    def _status_layout(self, cr, text: str):
+        """A layout for the status label: a little bolder, a little wider.
 
-        ``pango_cairo_show_layout`` places the layout's top-left corner at the
-        current point, not its baseline, so the offset has to be added to put
-        the text on the intended baseline.
+        The label is set in small caps with open letter spacing, which is
+        what makes it read as a label and not as a headline.
         """
-        line = layout.get_line_readonly(0)
-        if line is None:
-            return 0.0
-        _, logical = line.get_extents()
-        return logical.y / float(self._Pango.SCALE)
+        layout = self._layout(cr, text, self._status_font_size)
+        layout.set_font_description(self._font_description(self._status_font_size, medium=True))
+        make = getattr(self._Pango, "attr_letter_spacing_new", None)
+        if make is not None:
+            try:
+                attributes = self._Pango.AttrList.new()
+                attributes.insert(make(int(LETTER_SPACING * 1024)))
+                layout.set_attributes(attributes)
+            except Exception:  # noqa: BLE001 - the spacing is a nicety
+                log.debug("the letter spacing could not be set", exc_info=True)
+        return layout
 
-    def _layout_words(self, cr, words: Sequence[str], size: float) -> list[tuple[object, float]]:
-        """Lay every word out and measure it: ``[(layout, width), …]``."""
-        out = []
-        for word in transcript_words(words):
-            layout = self._layout(cr, word, size)
-            out.append((layout, self._layout_width(layout)))
-        return out
+    def _wrapped_layout(self, cr, text: str, size: float):
+        """A layout that wraps inside the card.
+
+        The layout is *not* limited to a number of lines and it does not
+        ellipsize: the card's text box is a window that the text rolls
+        through, so the text is free to be longer than the box.
+        """
+        layout = self._layout(cr, text, size)
+        layout.set_width(int(self._available_width() * self._Pango.SCALE))
+        layout.set_wrap(self._Pango.WrapMode.WORD_CHAR)
+        if hasattr(layout, "set_auto_dir"):
+            # The paragraph's direction follows its own text.
+            layout.set_auto_dir(True)
+        layout.set_alignment(self._alignment(text))
+        return layout
+
+    def _available_width(self) -> float:
+        """The width the card's texts may use.
+
+        The card's own width decides it — not the maximum — so a right-to-left
+        text ends at the right edge of the card it is actually drawn in, and
+        every text is wrapped inside the same fixed box.
+        """
+        width = getattr(self, "_card_width", 0.0)
+        if width <= 0.0:
+            width = 360.0
+        return max(40.0, width - self._hud.padding_x * 2.0)
+
+    def _alignment(self, text: str):
+        """The alignment of a text.
+
+        Pango's LEFT means the *start* of the paragraph when the layout's
+        direction is automatic, and the direction follows the text: a Persian
+        paragraph starts at its right edge, an English one at its left.  One
+        answer therefore covers both directions — with RIGHT the text would
+        hug the wrong edge of the card.
+        """
+        return self._Pango.Alignment.LEFT
+
+    def _apply_word_alphas(self, layout, text: str, alphas: tuple[float, ...], alpha: float = 1.0) -> None:
+        """Fade the words of the live preview in one by one.
+
+        The words are laid out by Pango as one paragraph — so they wrap and
+        reorder the way the language wants — and each of them gets its own
+        opacity through a foreground attribute.  The opacity of the document
+        (the roll that carries the text in or out) multiplies into it, so a
+        word that is rolling away fades with the rest of the text.
+        """
+        if len(alphas) < 2:
+            return
+        words = text.split()
+        if len(words) != len(alphas):
+            return
+        try:
+            attributes = self._Pango.AttrList.new()
+            offset = 0
+            for word, word_alpha in zip(words, alphas, strict=True):
+                start = offset
+                offset += len(word.encode("utf-8"))
+                end = offset
+                offset += 1  # the space between the words
+                faded = clamp(word_alpha, 0.0, 1.0) * clamp(alpha, 0.0, 1.0)
+                if faded >= 0.995:
+                    continue
+                rgba = self._Gdk.RGBA()
+                color = self.palette.text
+                rgba.red = color[0]
+                rgba.green = color[1]
+                rgba.blue = color[2]
+                rgba.alpha = faded
+                attribute = self._Pango.attr_foreground_new(rgba)
+                attribute.set_start_index(start)
+                attribute.set_end_index(end)
+                attributes.insert(attribute)
+            layout.set_attributes(attributes)
+        except Exception:  # noqa: BLE001 - the fade is a nicety
+            log.debug("the word fade could not be applied", exc_info=True)
+
+    def _show(self, cr, layout, x: float, y: float, color: tuple, alpha: float) -> None:
+        """Draw one Pango layout with its own opacity."""
+        if alpha <= 0.01:
+            return
+        cr.set_source_rgba(color[0], color[1], color[2], alpha)
+        cr.move_to(x, y)
+        self._PangoCairo.show_layout(cr, layout)
 
     def _layout_width(self, layout) -> float:
         """The logical width of a Pango layout, in pixels."""
         return layout.get_extents()[1].width / float(self._Pango.SCALE)
 
-    def _measure(self, cr, text: str, size: float) -> float:
-        return self._layout_width(self._layout(cr, text, size))
-
-    def _text_baseline(self, width: int, height: int) -> float:
-        """The baseline the overlay's text sits on."""
-        viz = self._viz
-        geometry = getattr(viz, "pill_geometry", None)
-        if callable(geometry):
-            try:
-                _, pill_y, _, _ = geometry(width, height)
-            except Exception:  # noqa: BLE001 - a broken geometry must not kill the paint
-                pill_y = float(height) - 46.0
-            return float(pill_y) - float(self._animator.config.offset_y)
-        # No pill: the label goes to the bottom of the surface.
-        return max(12.0, float(height) - 10.0)
+    def _layout_height(self, layout) -> float:
+        """The logical height of a Pango layout, in pixels."""
+        return layout.get_extents()[1].height / float(self._Pango.SCALE)
 
     # ------------------------------------------------------------------ thread-safe API
     def _post(self, fn, *args) -> None:
@@ -1213,7 +1195,7 @@ class GtkOverlay:
         self._GLib.idle_add(fn, *args)
 
     def show_listening(self) -> None:
-        self._post(self._apply, "listening", "")
+        self._post(self._apply, "listening")
 
     def set_partial(self, text: str) -> None:
         self._post(self._set_partial, text)
@@ -1221,6 +1203,8 @@ class GtkOverlay:
     def _set_partial(self, text: str) -> bool:
         # ``TranscriptAnimator`` handles character-level corrections without
         # restarting the animation, so the partial is handed over as it is.
+        # The animator owns the word window and the idle timeout; the frame
+        # loop copies what it says onto the card.
         self._animator.set_text(text)
         self._area.queue_draw()
         return False
@@ -1229,8 +1213,7 @@ class GtkOverlay:
         """Feed a new audio level (and optionally a sample buffer).
 
         The ``Overlay`` protocol only carries the scalar level; the optional
-        ``samples`` argument is an extension used by the waveform
-        visualization.
+        ``samples`` argument is an extension kept for compatibility.
         """
         try:
             value = max(0.0, min(1.0, float(level)))
@@ -1243,7 +1226,11 @@ class GtkOverlay:
                 self._samples = [float(s) for s in samples]
 
     def show_processing(self) -> None:
-        self._post(self._apply, "processing", "")
+        self._post(self._apply, "processing")
+
+    def show_translating(self, text: str) -> None:
+        """Show the source text while the translation is being made."""
+        self._post(self._apply, "translating", text)
 
     def show_error(self, message: str) -> None:
         self._post(self._apply, "error", message)
@@ -1251,12 +1238,12 @@ class GtkOverlay:
     def show_warning(self, message: str) -> None:
         self._post(self._apply, "warning", message)
 
-    def show_success(self, text: str = "") -> None:
-        """Show the success state; the overlay hides itself after ~1.2 s."""
-        self._post(self._apply, "success", text)
+    def show_success(self, text: str = "", language: str = "") -> None:
+        """Show the finished state; the overlay hides itself after a while."""
+        self._post(self._apply, "success", text, language)
 
     def hide(self) -> None:
-        self._post(self._apply, "hidden", None)
+        self._post(self._apply, "hidden")
 
     # ------------------------------------------------------------------ teardown
     def close(self) -> None:
@@ -1316,3 +1303,173 @@ class GtkOverlay:
         if loop is not None:
             loop.quit()
         return False
+
+
+@dataclass(frozen=True)
+class OverlaySettings:
+    """The configuration values the overlay paints with, resolved once."""
+
+    #: The ``overlay.theme`` value: a palette name or the path to a CSS file.
+    theme: str
+    #: The ``overlay.accent`` override ("" = the palette decides).
+    accent: str
+    #: The ``overlay.opacity`` factor applied to the card's alpha.
+    opacity: float
+    #: Whether the overlay animates at all (``overlay.animations``).
+    animated: bool
+    #: Whether the visualization reacts to the microphone.
+    audio_meter: bool
+    #: Whether the audible cues are played.
+    sounds: bool
+    #: The show/hide fade duration in milliseconds (0 = instant).
+    fade_ms: int
+    #: The font family the user configured (``overlay.font``); empty means
+    #: "the system's own font".
+    font_family: str
+    #: The point size of the main text the user configured
+    #: (``overlay.font_size``); zero means "the system's own font size".
+    font_size: float
+    #: The live preview's settings.
+    transcript: TranscriptConfig
+
+
+def resolve_settings(cfg: OverlayConfig) -> OverlaySettings:
+    """Resolve the overlay's configuration into the values it paints with.
+
+    The master animation switch reaches three places: the show/hide fade
+    becomes instant, the transcript words stop animating and the state
+    envelopes stop pulsing.
+    """
+    animated = bool(getattr(cfg, "animations", True))
+    transcript = TranscriptConfig.from_overlay_config(cfg)
+    if not animated:
+        transcript = replace(
+            transcript,
+            enter_seconds=0.0,
+            exit_seconds=0.0,
+            stagger_seconds=0.0,
+        )
+    fade_ms = 0 if not animated else int(getattr(cfg, "fade_ms", 140))
+    font_size = resolve_font_size(getattr(cfg, "font_size", DEFAULT_FONT_SIZE))
+    return OverlaySettings(
+        theme=str(getattr(cfg, "theme", "nocturne") or "nocturne"),
+        accent=str(getattr(cfg, "accent", "") or ""),
+        opacity=clamp(float(getattr(cfg, "opacity", 0.86)), 0.0, 1.0),
+        animated=animated,
+        audio_meter=bool(getattr(cfg, "show_audio_meter", True)),
+        sounds=bool(getattr(cfg, "sounds", False)),
+        fade_ms=fade_ms,
+        font_family=resolve_font_family(getattr(cfg, "font", "")),
+        font_size=font_size,
+        transcript=transcript,
+    )
+
+
+def create_overlay(cfg: OverlayConfig) -> Overlay:
+    if not cfg.enabled:
+        return NullOverlay()
+    try:
+        preload_layer_shell()
+        overlay = GtkOverlay(cfg)
+    except Exception as e:  # noqa: BLE001 - missing gi / no layer-shell support
+        log.warning("GTK overlay unavailable (%s); running without overlay. Run `voicetype doctor`.", e)
+        return NullOverlay()
+    # The overlay owns a theme watcher and a GLib loop; both are released when
+    # the process goes away.
+    atexit.register(overlay.close)
+    return overlay
+
+
+def preload_layer_shell() -> str | None:
+    """Load libgtk4-layer-shell *before* libwayland so it can bind zwlr_layer_shell_v1.
+
+    gtk4-layer-shell interposes libwayland symbols to grab the layer-shell global when the
+    display is opened. If GDK (and with it libwayland) is loaded first, the global is never
+    bound and every window fails with "Failed to initialize layer surface ... may have been
+    linked after libwayland". See gtk4-layer-shell's linking.md.
+    """
+    import ctypes
+    import ctypes.util
+
+    candidates = [
+        ctypes.util.find_library("gtk4-layer-shell"),
+        "libgtk4-layer-shell.so",
+        "/usr/lib/libgtk4-layer-shell.so",
+        "/usr/lib64/libgtk4-layer-shell.so",
+        "/usr/local/lib/libgtk4-layer-shell.so",
+    ]
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            ctypes.CDLL(cand, mode=ctypes.RTLD_GLOBAL)
+            return cand
+        except OSError:
+            continue
+    return None
+
+
+def install_transparency_css(Gtk, Gdk) -> None:
+    """Make the overlay window's surface transparent (once per process).
+
+    A themed desktop's ``~/.config/gtk-4.0/gtk.css`` paints an opaque
+    window colour at ``STYLE_PROVIDER_PRIORITY_USER``.  The overlay's
+    transparency rule has to outrank it, or the theme's colour is painted as
+    an opaque slab behind the card (hyprwhspr issue #248).
+    """
+    global _transparency_provider
+
+    if _transparency_provider is not None:
+        return
+    display = Gdk.Display.get_default()
+    if display is None:
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_string(TRANSPARENCY_CSS)
+    Gtk.StyleContext.add_provider_for_display(
+        display,
+        provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_USER + 1,
+    )
+    _transparency_provider = provider
+
+
+def system_font() -> tuple[str, float]:
+    """The desktop's own font: the family and the size, in points.
+
+    The family and the size come from the desktop settings, so the overlay
+    looks like the rest of the system.  Without a display they cannot be
+    read: the family stays empty (Pango's default) and the size falls back.
+    """
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Pango", "1.0")
+        from gi.repository import Gtk, Pango
+
+        settings = Gtk.Settings.get_default()
+        name = settings.get_property("gtk-font-name") if settings is not None else ""
+        description = Pango.FontDescription(str(name or ""))
+        family = str(description.get_family() or "")
+        size = float(description.get_size()) / float(Pango.SCALE)
+        return (family, size if size > 0.0 else FALLBACK_FONT_SIZE)
+    except Exception:  # noqa: BLE001 - the desktop font is a nicety
+        log.debug("the system font could not be read", exc_info=True)
+        return ("", FALLBACK_FONT_SIZE)
+
+
+def resolve_overlay_font(cfg: OverlayConfig) -> tuple[str, float]:
+    """The font family and the point size the overlay draws with.
+
+    This is what ``voicetype doctor`` reports: the configured family and
+    size, or the system's own font — scaled into the band the card was
+    designed for.
+    """
+    settings = resolve_settings(cfg)
+    family, size = settings.font_family, settings.font_size
+    if not family or size <= 0.0:
+        system_family, system_size = system_font()
+        family = family or system_family
+        size = hud_font_sizes(size, system_size)[0]
+    return (family, size)

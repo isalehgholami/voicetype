@@ -25,4 +25,4 @@ Without `--system-deps` it stays root-free and prints the commands you would hav
 - [Troubleshooting](troubleshooting.md)
 - [Theming](theming.md) · [Compatibility](compatibility.md) · [Injection matrix](inject-matrix.md) · [Known issues](known-issues.md)
 - [Post-processing (Persian)](postprocess.md) · [Translation](translation.md) · [Privacy](privacy.md) · [Benchmarks](benchmarks.md)
-- [Architecture](VoiceType-Architecture.md) · [Decisions (ADRs)](adr/0001-language-and-framework.md) · [ADR-0007: OSD visual language](adr/0007-overlay-visual-language.md)
+- [Architecture](VoiceType-Architecture.md) · [Decisions (ADRs)](adr/0001-language-and-framework.md) · [ADR-0007: OSD visual language](adr/0007-overlay-visual-language.md) · [ADR-0008: the floating HUD](adr/0008-hud-visual-language.md)

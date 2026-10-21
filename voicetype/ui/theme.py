@@ -1,10 +1,11 @@
 """Theme tokens for the VoiceType overlay.
 
-The default palette is Tokyo Night, matching the hyprwhspr design language.
-Every colour is an RGBA tuple of floats in ``0.0..1.0`` — the representation
-Cairo expects — so no conversion happens on the hot drawing path.
+The default palette is *nocturne*: the near-black card with the violet
+undertone the floating HUD was designed around (ADR-0008).  Every other
+palette — Tokyo Night and the rest — is still there and still works; the
+palette only decides the colours, never the layout.
 
-A theme can be selected by name (``overlay.theme = "tokyo-night"``) or by
+A theme can be selected by name (``overlay.theme = "nocturne"``) or by
 pointing at a CSS file that uses GTK's ``@define-color`` syntax, e.g.::
 
     @define-color background-color #1a1b26;
@@ -14,6 +15,9 @@ pointing at a CSS file that uses GTK's ``@define-color`` syntax, e.g.::
 
 Only the keys listed in :data:`CSS_COLOR_KEYS` are honoured; anything else is
 ignored so a desktop theme file can be reused verbatim.
+
+Every colour is an RGBA tuple of floats in ``0.0..1.0`` — the representation
+Cairo expects — so no conversion happens on the hot drawing path.
 """
 
 from __future__ import annotations
@@ -195,7 +199,28 @@ DRACULA = Palette(
     shadow=(0.0, 0.0, 0.0, 0.34),
 )
 
+# Nocturne -- the palette the floating HUD was designed for (ADR-0008).
+# A near-black card with a violet undertone, a violet accent for the
+# activity, a muted mint for the live state and a hairline white border.
+NOCTURNE = Palette(
+    background=(0.098, 0.090, 0.125, 0.97),   # #191720
+    border=(1.0, 1.0, 1.0, 0.07),            # a white hairline
+    text=(0.953, 0.941, 0.976, 1.0),          # #F3F0F9
+    text_dim=(0.663, 0.639, 0.710, 1.0),     # #A9A3B5
+    accent=(0.651, 0.592, 1.0, 1.0),         # #A697FF -- the violet
+    accent_alt=(0.486, 0.420, 0.878, 1.0),   # a deeper violet
+    recording=(0.647, 0.910, 0.549, 1.0),    # #A5E88C -- the mint
+    paused=(0.878, 0.722, 0.498, 1.0),       # a quiet amber
+    processing=(0.651, 0.592, 1.0, 1.0),     # the violet: work is in progress
+    error=(0.898, 0.549, 0.549, 1.0),        # a muted rose
+    success=(0.647, 0.910, 0.549, 1.0),      # #A5E88C
+    bar_left=(0.651, 0.592, 1.0, 1.0),       # the violet
+    bar_right=(0.651, 0.592, 1.0, 1.0),      # the violet
+    shadow=(0.0, 0.0, 0.0, 0.34),
+)
+
 PALETTES: dict[str, Palette] = {
+    "nocturne": NOCTURNE,
     "tokyo-night": TOKYO_NIGHT,
     "tokyo-night-light": TOKYO_NIGHT_LIGHT,
     "catppuccin-mocha": CATPPUCCIN_MOCHA,
@@ -212,7 +237,7 @@ _ALIASES = {
 }
 
 PALETTE_NAMES = tuple(sorted(PALETTES))
-DEFAULT_PALETTE = "tokyo-night"
+DEFAULT_PALETTE = "nocturne"
 
 #: Maps a CSS ``@define-color`` key onto a :class:`Palette` field.
 CSS_COLOR_KEYS = {

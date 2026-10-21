@@ -253,6 +253,117 @@ def test_pipeline_applied_before_injection():
     assert inj.texts == ["سلام دنیا!"]
 
 
+# ------------------------------------------------------------------ translation
+
+
+class Translator:
+    """A translator that records what it was asked to translate."""
+
+    def __init__(self, label="GERMAN", out="Hallo Welt", delay=0.0):
+        self.label = label
+        self.out = out
+        self.delay = delay
+        self.seen = []
+
+    def translate(self, text):
+        self.seen.append(text)
+        if self.delay:
+            time.sleep(self.delay)
+        return self.out
+
+    def close(self):
+        pass
+
+
+def make_translating(translator=None, source=None, pipeline=None):
+    """A dispatcher whose components translate the transcript."""
+    translator = translator if translator is not None else Translator()
+    backend = Backend()
+    injector = Injector()
+    overlay = Overlay()
+    comps = Components(
+        Config(),
+        backend,
+        injector,
+        pipeline or (lambda t: translator.translate(t)),
+        translator,
+        source or (lambda t: t),
+    )
+    d = Dispatcher(
+        comps,
+        lambda on_chunk, c, on_err: FakeAudio(on_chunk),
+        overlay,
+        error_display_seconds=0.05,
+    )
+    return d, backend, injector, overlay, translator
+
+
+def test_the_source_is_shown_while_the_translation_is_made():
+    d, backend, inj, ov, translator = make_translating()
+    d.start()
+    speak()
+    d.stop()
+    d.wait_idle()
+    names = ov.names()
+    assert "show_translating" in names
+    # the source is shown before the result
+    assert names.index("show_translating") < names.index("show_success")
+    source = [e for e in ov.events if e[0] == "show_translating"][0]
+    assert source[1] == "سلام دنیا"
+
+
+def test_the_result_is_shown_with_the_name_of_its_language():
+    d, backend, inj, ov, translator = make_translating()
+    d.start()
+    speak()
+    d.stop()
+    d.wait_idle()
+    success = [e for e in ov.events if e[0] == "show_success"][0]
+    assert success[1] == "Hallo Welt"
+    assert success[2] == "GERMAN"
+
+
+def test_the_translation_is_what_gets_injected():
+    d, backend, inj, ov, translator = make_translating()
+    d.start()
+    speak()
+    d.stop()
+    d.wait_idle()
+    assert inj.texts == ["Hallo Welt"]
+    assert translator.seen == ["سلام دنیا"]
+
+
+def test_the_translation_is_its_own_state():
+    d, backend, inj, ov, translator = make_translating(translator=Translator(delay=0.4))
+    d.start()
+    speak()
+    seen = []
+
+    def watch():
+        while d.state is not State.IDLE:
+            seen.append(d.state)
+            time.sleep(0.005)
+
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
+    d.stop()
+    d.wait_idle()
+    thread.join(1)
+    assert State.TRANSLATING in seen
+
+
+def test_without_a_translator_nothing_is_translated():
+    d, backend, inj, ov = make()
+    d.start()
+    speak()
+    d.stop()
+    d.wait_idle()
+    assert "show_translating" not in ov.names()
+    success = [e for e in ov.events if e[0] == "show_success"][0]
+    # no language: the card shows the result without a language label
+    assert success[2] == ""
+
+
 def test_auto_stop_after_silence():
     cfg = parse_config({"stt": {"silence_threshold_seconds": 0.5}})
     d, backend, inj, ov = make(cfg=cfg)

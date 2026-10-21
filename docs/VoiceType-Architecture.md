@@ -451,7 +451,9 @@ stateDiagram-v2
     [*] --> IDLE
     IDLE --> LISTENING : hotkey_toggle()
     LISTENING --> TRANSCRIBING : silence_detected() | hotkey_toggle()
+    TRANSCRIBING --> TRANSLATING : stt_final_received() (translation on)
     TRANSCRIBING --> INJECTING : stt_final_received()
+    TRANSLATING --> INJECTING : translation_finished()
     INJECTING --> IDLE : text_injected()
     LISTENING --> IDLE : escape_pressed() | error
     TRANSCRIBING --> IDLE : error
@@ -459,8 +461,9 @@ stateDiagram-v2
 
 - **IDLE** — no audio capture, overlay hidden, audio thread parked.
 - **LISTENING** — mic open, overlay visible with waveform, STT receiving chunks.
-- **TRANSCRIBING** — mic closed (silence detected or user toggled), waiting for STT final result. Overlay shows "processing".
-- **INJECTING** — STT returned text, `wtype`/`xdotool` running. Overlay hidden immediately, then text appears at cursor.
+- **TRANSCRIBING** — mic closed (silence detected or user toggled), waiting for STT final result. Overlay shows "transcribing".
+- **TRANSLATING** — the transcript is there and the translation is on its way. Overlay shows the source text under a "translating" label.
+- **INJECTING** — STT returned text (translated, if the translation is on), `wtype`/`xdotool` running. Overlay hidden immediately, then text appears at cursor.
 
 ### 6.5 Why these specific components?
 
@@ -999,9 +1002,8 @@ keyfile = ""                      # path to service-account JSON
 [overlay]
 position = "bottom"               # top | center | bottom
 offset_y = 50                     # pixels from anchor
-theme = "dark"                    # palette name (tokyo-night, nord, …), light | dark, or a .css path
+theme = "nocturne"                # palette name (nocturne, tokyo-night, nord, …), light | dark, or a .css path
 opacity = 0.86                    # 0.0–1.0
-style = "pill"                    # pill | waveform | vu_meter
 
 [injector]
 backend = "auto"                  # auto | wtype | xdotool
@@ -1265,19 +1267,19 @@ After changing the combo, run `systemctl --user reload voicetype.service` AND re
 | `[overlay] offset_x` | `0` | `-1920`–`1920` (px) | Fine-tune horizontal position relative to anchor. |
 | `[overlay] offset_y` | `50` | `-1080`–`1080` (px) | Fine-tune vertical position. |
 | `[overlay] enabled` | `true` | `true` / `false` | Whether the overlay window is opened at all. With it off the daemon runs without one. |
-| `[overlay] theme` | `"dark"` | `tokyo-night` / `tokyo-night-light` / `catppuccin-mocha` / `rose-pine` / `nord` / `gruvbox-dark` / `dracula`, the legacy `light` / `dark`, or a path to a `.css` file | Palette for background, text and accent colours. A CSS file uses GTK's `@define-color` syntax (`background-color`, `border-color`, `text-color`, `accent-color`, …). When the value is a `.css` file it is watched, so editing the file repaints the overlay without a daemon restart. The default `pill` style paints fixed colours, so the palette is only visible in the `waveform` and `vu_meter` styles ([docs/theming.md](theming.md)). |
-| `[overlay] accent` | `""` | `""` or a hex colour (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) | Overrides the palette's accent colour. Empty = use the palette accent. The accent slot is carried in the palette but not painted on its own yet. |
-| `[overlay] opacity` | `0.86` | `0.0`–`1.0` | Scales the opacity of the card the visualization is drawn on: the factor multiplies the alpha of the palette's background colour (the waveform and VU-meter panel) and the pill's own body. 0.0 = invisible, 1.0 = the palette's own opacity. |
-| `[overlay] width` | `360` | `120`–`1920` (px) | Overlay width. |
-| `[overlay] height` | `96` | `48`–`480` (px) | Overlay height. |
+| `[overlay] theme` | `"nocturne"` | `nocturne` / `tokyo-night` / `tokyo-night-light` / `catppuccin-mocha` / `rose-pine` / `nord` / `gruvbox-dark` / `dracula`, the legacy `light` / `dark`, or a path to a `.css` file | Palette for the card's body, border, texts, status dot and waveform. A CSS file uses GTK's `@define-color` syntax (`background-color`, `border-color`, `text-color`, `accent-color`, …). When the value is a `.css` file it is watched, so editing the file repaints the overlay without a daemon restart ([docs/theming.md](theming.md)). |
+| `[overlay] accent` | `""` | `""` or a hex colour (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) | Overrides the palette's accent colour — the colour of the waveform's bars. Empty = use the palette accent. |
+| `[overlay] opacity` | `0.86` | `0.0`–`1.0` | Scales the opacity of the card: the factor multiplies the alpha of the palette's background colour. 0.0 = invisible, 1.0 = the palette's own opacity. |
+| `[overlay] width` | `360` | `120`–`1920` (px) | The fixed width of the card. The card never resizes with the text it holds. |
+| `[overlay] height` | `128` | `48`–`480` (px) | The fixed height of the card. The text lives in a fixed box inside it and rolls through it. |
 | `[overlay] font` | `""` | Any family list Pango understands | The font family of every text the overlay draws: the status labels, the messages and the live transcript. Empty = the system's own font, so the OSD looks like the rest of the desktop. |
-| `[overlay] font_size` | `0.0` | `0.0`–`72.0` (pt) | The point size of the main text, the live transcript. Zero = the system's own font size, multiplied by 1.6 so the OSD is readable at a glance. The status labels are drawn at 70 % of it, and a font that does not fit above the pill is shrunk until it does. |
-| `[overlay] show_partial_text` | `true` | `true` / `false` | If true, the live partial transcription is fed to the overlay and shown above the pill (streaming providers only). Needs `show_transcript` on as well. |
-| `[overlay] show_audio_meter` | `true` | `true` / `false` | If true, the visualization reacts to the microphone (the bars follow the level). If false, the level is treated as silence and the bars stay flat. |
-| `[overlay] style` | `"pill"` | `pill` / `waveform` / `vu_meter` | Which visualization the overlay draws. |
+| `[overlay] font_size` | `0.0` | `0.0`–`72.0` (pt) | The point size of the main text. Zero = the system's own font size, clamped into the band the card was designed for (the main text between 14 and 16 px). The status label is drawn at 72 % of it. |
+| `[overlay] show_partial_text` | `true` | `true` / `false` | If true, the live partial transcription is fed to the overlay and shown on the card (streaming providers only). Needs `show_transcript` on as well. |
+| `[overlay] show_audio_meter` | `true` | `true` / `false` | If true, the waveform reacts to the microphone (the bars follow the level). If false, the level is treated as silence and the bars stay flat. |
+| `[overlay] style` | `"hud"` | `hud` / `pill` / `waveform` / `vu_meter` | Deprecated and ignored: the card has one shape now. The old values are still accepted so that existing configuration files keep working. |
 | `[overlay] animations` | `true` | `true` / `false` | Master switch for motion. With it off the overlay appears and disappears instantly (`fade_ms` is ignored), the state envelopes freeze (no breathing, strobing or pulsing) and the transcript words appear without animating. |
-| `[overlay] show_transcript` | `true` | `true` / `false` | Shows the word-by-word live transcript above the pill. |
-| `[overlay] transcript_words` | `4` | `1`–`12` | How many words the live preview keeps. |
+| `[overlay] show_transcript` | `true` | `true` / `false` | Shows the word-by-word live transcript on the card. |
+| `[overlay] transcript_words` | `8` | `1`–`12` | How many words the live preview keeps. |
 | `[overlay] fade_ms` | `140` | `0`–`1000` (ms) | Show/hide fade duration. |
 | `[overlay] sounds` | `false` | `true` / `false` | Audible start/stop/error cues. The tones are synthesised with the standard library and played with `pw-play`, `paplay`, `aplay` or `ffplay`; with no player installed the cue is silently dropped. |
 

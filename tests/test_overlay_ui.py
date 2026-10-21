@@ -6,7 +6,6 @@ instantiated, and everything that is exercised is a pure function.
 
 import ast
 import inspect
-import math
 import os
 import threading
 from pathlib import Path
@@ -18,33 +17,34 @@ from voicetype.dispatcher import NullOverlay
 from voicetype.overlay import (
     MODE_TO_STATE,
     STATUS_FONT_SCALE,
-    SYSTEM_FONT_SCALE,
     TRANSPARENCY_CSS,
     Anchors,
     GtkOverlay,
     create_overlay,
-    display_text,
-    fitting_size,
     meter_audio,
     mode_sound,
-    preview_height,
     resolve_accent,
     resolve_anchors,
+    resolve_overlay_font,
     resolve_settings,
-    scaled_font_size,
     smooth,
     status_text_for,
     style_palette,
-    synthesize_samples,
     theme_file,
-    total_width,
-    transcript_words,
-    word_positions,
 )
-from voicetype.ui.animations import FadeEnvelope, StateManager, VisualizerState
+from voicetype.ui.animations import FadeEnvelope
+from voicetype.ui.hud import (
+    ColorTween,
+    Crossfade,
+    HudMetrics,
+    HudState,
+    TextTicker,
+    Waveform,
+    hud_font_sizes,
+    hud_label,
+)
 from voicetype.ui.theme import PALETTES, Theme, ThemeWatcher, hex_to_rgba, resolve_palette
 from voicetype.ui.transcript import TranscriptAnimator, TranscriptConfig
-from voicetype.ui.visualizations import create_visualization
 
 # ---------------------------------------------------------------- creation
 
@@ -86,6 +86,7 @@ def test_smooth_converges_monotonically():
         "set_partial",
         "set_audio_level",
         "show_processing",
+        "show_translating",
         "show_error",
         "show_warning",
         "show_success",
@@ -110,55 +111,78 @@ def test_set_partial_takes_the_text():
     assert parameters == ["text"]
 
 
+def test_the_overlay_can_show_the_source_and_the_result():
+    """The card carries the source while it translates and the result after."""
+    translating = list(inspect.signature(GtkOverlay.show_translating).parameters)[1:]
+    assert translating == ["text"]
+    success = list(inspect.signature(GtkOverlay.show_success).parameters)[1:]
+    assert success == ["text", "language"]
+
+
 # ---------------------------------------------------------------- mode → state
 
 
 def test_mode_to_state_mapping():
     assert MODE_TO_STATE == {
-        "listening": "recording",
-        "processing": "processing",
-        "error": "error",
-        "warning": "paused",
-        "success": "success",
+        "listening": HudState.LISTENING,
+        "processing": HudState.TRANSCRIBING,
+        "translating": HudState.TRANSLATING,
+        "success": HudState.TRANSLATED,
+        "error": HudState.ERROR,
+        "warning": HudState.NOTICE,
+        "hidden": HudState.READY,
     }
 
 
-def test_a_warning_is_a_paused_notice_not_a_recording():
-    # a warning is a static amber notice: it must not look like a live mic
-    assert MODE_TO_STATE["warning"] == "paused"
-    assert MODE_TO_STATE["warning"] != "recording"
+def test_a_warning_is_a_notice_not_a_recording():
+    # a warning is a quiet amber notice: it must not look like a live mic
+    assert MODE_TO_STATE["warning"] == HudState.NOTICE
+    assert MODE_TO_STATE["warning"] != HudState.LISTENING
 
 
-def test_every_mode_maps_to_a_known_visualizer_state():
-    known = {state.value for state in VisualizerState}
-    for mode, state in MODE_TO_STATE.items():
-        assert state in known, mode
+def test_the_listening_state_is_the_only_live_one():
+    live = {state for state, value in MODE_TO_STATE.items() if value is HudState.LISTENING}
+    assert live == {"listening"}
 
 
-def test_status_text_uses_the_mode_labels_and_the_messages():
-    assert status_text_for("listening") == "listening"
-    assert status_text_for("processing") == "processing"
-    assert status_text_for("error", "خطا رخ داد") == "خطا رخ داد"
-    assert status_text_for("warning", "هشدار") == "هشدار"
-    assert status_text_for("hidden") == ""
+def test_status_text_uses_the_state_labels():
+    assert status_text_for("listening") == "LISTENING"
+    assert status_text_for("processing") == "TRANSCRIBING"
+    assert status_text_for("translating") == "TRANSLATING"
+    assert status_text_for("success") == "TRANSLATED"
+    assert status_text_for("error") == "ERROR"
+    assert status_text_for("warning") == "NOTICE"
+    assert status_text_for("hidden") == "READY"
 
 
-def test_every_label_is_lower_case():
-    assert status_text_for("error", "Could not understand the audio") == "could not understand the audio"
-    assert status_text_for("warning", "Provider Fallback") == "provider fallback"
-    assert status_text_for("success", "Hello World") == "hello world"
-    assert display_text("Hello World") == "hello world"
-    assert display_text("") == ""
+def test_every_label_is_upper_case():
+    for mode in MODE_TO_STATE:
+        label = status_text_for(mode)
+        assert label == label.upper()
+        assert label == hud_label(MODE_TO_STATE[mode])
 
 
-def test_the_live_transcript_is_lower_case_too():
-    assert transcript_words(["Hello", "WORLD", "سلام"]) == ["hello", "world", "سلام"]
+def test_the_labels_are_the_ones_the_design_names():
+    assert hud_label(HudState.LISTENING) == "LISTENING"
+    assert hud_label(HudState.TRANSCRIBING) == "TRANSCRIBING"
+    assert hud_label(HudState.TRANSLATING) == "TRANSLATING"
+    assert hud_label(HudState.TRANSLATED) == "TRANSLATED"
 
 
-def test_one_font_for_the_whole_osd():
-    """One font for the whole OSD: the labels, the messages and the transcript."""
+def test_the_content_keeps_the_case_it_was_written_in():
+    """Only the labels are upper case: the speech keeps its own case."""
+    source = inspect.getsource(GtkOverlay)
+    assert ".lower()" not in source
+    assert "display_text" not in source
+
+
+# ---------------------------------------------------------------- font
+
+
+def test_one_font_for_the_whole_card():
+    """One font for the whole card: the label, the messages and the preview."""
     cfg = OverlayConfig()
-    # the live transcript shares the overlay's font
+    # the live preview shares the card's font
     assert TranscriptConfig.from_overlay_config(cfg).font_family == cfg.font
     # the renderer lays every text out with that one family
     source = inspect.getsource(GtkOverlay._layout)
@@ -199,31 +223,196 @@ def test_an_unset_font_is_left_to_the_system():
     assert settings.font_size == 0.0
 
 
-def test_a_big_font_needs_a_taller_surface():
-    metrics = (1.4, 0.4)
-    assert preview_height(42.0, 7.0, 40.0, metrics) > preview_height(42.0, 7.0, 17.0, metrics)
-
-
-def test_a_font_that_does_not_fit_is_shrunk():
-    # a 20pt font with an ascent of 1.4 px per point needs 28 px above the
-    # baseline
-    assert fitting_size(20.0, 1.4, 40.0) == 20.0
-    assert fitting_size(20.0, 1.4, 10.0) == pytest.approx(10.0 / 1.4)
-
-
-def test_a_font_that_does_not_fit_the_surface_at_all_is_kept():
-    # nothing sensible can be drawn in no space, so the size is left alone
-    assert fitting_size(20.0, 1.4, 0.0) == 20.0
-
-
-def test_the_system_size_is_scaled_up():
-    """The OSD is read at a glance, so the system size is multiplied."""
-    assert scaled_font_size(0.0, 10.0) == pytest.approx(10.0 * SYSTEM_FONT_SCALE)
-    assert scaled_font_size(0.0, 10.0) > 10.0
+def test_the_font_sizes_land_in_the_band_the_card_was_designed_for():
+    """The main text is 14–16 px and the status label 10–12 px."""
+    primary, status, secondary = hud_font_sizes(0.0, 11.0)
+    assert 13.0 <= primary * 96 / 72 <= 17.0  # points → pixels
+    assert 9.0 <= status * 96 / 72 <= 13.0
+    assert secondary < primary
 
 
 def test_a_configured_size_wins_over_the_system_size():
-    assert scaled_font_size(18.0, 10.0) == 18.0
+    primary, status, _ = hud_font_sizes(18.0, 10.0)
+    assert primary == 18.0
+    assert status < primary
+
+
+def test_the_doctor_reports_the_font_the_overlay_would_use():
+    family, size = resolve_overlay_font(OverlayConfig(font="Fira Code", font_size=20.0))
+    assert family == "Fira Code"
+    assert size == 20.0
+
+
+def test_the_texts_wrap_inside_the_card():
+    """Every text is wrapped inside the card's own width.
+
+    The card has a fixed width, so the texts are wrapped inside it instead
+    of deciding how wide the card is.  That is what keeps a right-to-left
+    text at the right edge of the card it is drawn in.
+    """
+    overlay = GtkOverlay.__new__(GtkOverlay)
+    overlay._card_width = 360
+    overlay._hud = HudMetrics()
+    assert overlay._available_width() == 360 - 2 * HudMetrics().padding_x
+
+
+def test_a_narrow_card_narrows_its_texts():
+    overlay = GtkOverlay.__new__(GtkOverlay)
+    overlay._card_width = 240
+    overlay._hud = HudMetrics()
+    assert overlay._available_width() == 240 - 2 * HudMetrics().padding_x
+
+
+def test_a_right_to_left_text_is_aligned_with_the_start_of_its_paragraph():
+    """Pango's LEFT means the *start* of the paragraph when the direction is
+    automatic, and the direction follows the text — so one answer covers
+    both directions.  With RIGHT a Persian text would hug the wrong edge.
+    """
+    import gi
+
+    gi.require_version("Pango", "1.0")
+    from gi.repository import Pango
+
+    overlay = GtkOverlay.__new__(GtkOverlay)
+    overlay._Pango = Pango
+    assert overlay._alignment("سلام دنیا") == Pango.Alignment.LEFT
+    assert overlay._alignment("hello world") == Pango.Alignment.LEFT
+
+
+def test_the_wrapped_layout_follows_the_direction_of_its_own_text():
+    """The layout's direction is automatic, so the text decides it."""
+    import gi
+
+    gi.require_version("Pango", "1.0")
+    gi.require_version("PangoCairo", "1.0")
+    from gi.repository import Pango, PangoCairo
+
+    cairo = pytest.importorskip("cairo")
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 200, 60)
+    cr = cairo.Context(surface)
+
+    overlay = GtkOverlay.__new__(GtkOverlay)
+    overlay._Pango = Pango
+    overlay._PangoCairo = PangoCairo
+    overlay._hud = HudMetrics()
+    overlay._font_family = ""
+    overlay._font_size = 11.0
+    overlay._card_width = 360
+
+    layout = overlay._wrapped_layout(cr, "سلام دنیا", 11.0)
+    assert layout.get_auto_dir() is True
+    assert layout.get_width() == int(overlay._available_width() * Pango.SCALE)
+
+
+def test_the_text_is_not_cut_short_by_the_layout():
+    """The text rolls through the box, so the layout must not ellipsize it.
+
+    A layout that stopped at the last line would swallow the text that the
+    box is supposed to scroll to.
+    """
+    import gi
+
+    gi.require_version("Pango", "1.0")
+    gi.require_version("PangoCairo", "1.0")
+    from gi.repository import Pango, PangoCairo
+
+    cairo = pytest.importorskip("cairo")
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 200, 60)
+    cr = cairo.Context(surface)
+
+    overlay = GtkOverlay.__new__(GtkOverlay)
+    overlay._Pango = Pango
+    overlay._PangoCairo = PangoCairo
+    overlay._hud = HudMetrics()
+    overlay._font_family = ""
+    overlay._font_size = 11.0
+    overlay._card_width = 360
+
+    layout = overlay._wrapped_layout(cr, "word " * 60, 11.0)
+    assert layout.get_ellipsize() == Pango.EllipsizeMode.NONE
+    assert layout.get_line_count() > 3
+
+
+# ---------------------------------------------------------------- the fixed card
+
+
+def _paintable_overlay():
+    """An overlay that can paint itself without a compositor.
+
+    The real drawing code is used: only the parts the painting touches are
+    filled in, the constructor needs a display the test machine has not.
+    """
+    import gi
+
+    gi.require_version("Pango", "1.0")
+    gi.require_version("PangoCairo", "1.0")
+    gi.require_version("Gdk", "4.0")
+    from gi.repository import Gdk, Pango, PangoCairo
+
+    overlay = GtkOverlay.__new__(GtkOverlay)
+    overlay._Pango = Pango
+    overlay._PangoCairo = PangoCairo
+    overlay._Gdk = Gdk
+    overlay._hud = HudMetrics()
+    overlay._state = HudState.LISTENING
+    overlay._label = Crossfade(0.2)
+    overlay._ticker = TextTicker(HudMetrics())
+    overlay._tint = ColorTween(0.2)
+    overlay._wave = Waveform(HudMetrics())
+    overlay._language = ""
+    overlay._source = ""
+    overlay._live_text = ""
+    overlay._word_alphas = ()
+    overlay._line_height = 0.0
+    overlay._lock = threading.Lock()
+    overlay._animator = TranscriptAnimator(TranscriptConfig(word_limit=8))
+    overlay._transcript_enabled = True
+    overlay._card_width = 360
+    overlay._card_height = 128
+    overlay._font_family = ""
+    overlay._font_size = 11.0
+    overlay._status_font_size = 8.0
+    overlay._secondary_font_size = 9.5
+    overlay.palette = resolve_palette("nocturne")
+    return overlay
+
+
+def _paint(overlay, text: str, secondary: str = "") -> tuple:
+    """Paint the card with ``text`` and return the size it asked for."""
+    cairo = pytest.importorskip("cairo")
+    overlay._ticker.set(text, secondary)
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 400, 200)
+    cr = cairo.Context(surface)
+    overlay._draw_hud(cr, 400, 200)
+    return overlay._target_size
+
+
+def test_the_card_keeps_its_size_whatever_it_shows():
+    """The card must not resize while the user talks.
+
+    A card that follows the text it holds grows and shrinks with every
+    word; the text belongs in a fixed box instead.
+    """
+    overlay = _paintable_overlay()
+    short = _paint(overlay, "hi")
+    long = _paint(overlay, "a rather long sentence that has to wrap over more than one line " * 3)
+    assert short == long
+
+
+def test_the_card_is_the_size_it_was_configured_with():
+    overlay = _paintable_overlay()
+    size = _paint(overlay, "hello")
+    margin = HudMetrics().surface_margin
+    assert size == (360 + 2 * round(margin), 128 + 2 * round(margin))
+
+
+def test_the_text_stays_inside_the_card():
+    """The text is clipped by the card's box: it never spills out of it."""
+    overlay = _paintable_overlay()
+    _paint(overlay, "word " * 80)
+    # the text is wrapped inside the card, not across it
+    assert overlay._available_width() < overlay._card_width
+    assert overlay._hud.padding_x > 0
 
 
 # ---------------------------------------------------------------- theme / accent
@@ -234,9 +423,9 @@ def test_resolve_palette_known_name():
     assert palette is PALETTES["tokyo-night"]
 
 
-def test_resolve_palette_unknown_name_falls_back():
-    assert resolve_palette("does-not-exist") is PALETTES["tokyo-night"]
-    assert resolve_palette("") is PALETTES["tokyo-night"]
+def test_the_default_palette_is_the_one_the_card_was_designed_for():
+    assert resolve_palette("") is PALETTES["nocturne"]
+    assert resolve_palette("does-not-exist") is PALETTES["nocturne"]
 
 
 def test_accent_override_uses_hex_to_rgba():
@@ -395,51 +584,6 @@ def test_the_direction_belongs_to_the_whole_paragraph_not_to_the_word_window():
     assert frame.direction == "rtl"
 
 
-# ---------------------------------------------------------------- audio
-
-
-def test_synthesize_samples_pads_and_truncates():
-    assert synthesize_samples([], 4) == [0.0, 0.0, 0.0, 0.0]
-    assert synthesize_samples([0.5], 4) == [0.0, 0.0, 0.0, 0.5]
-    assert synthesize_samples([0.1, 0.2, 0.3, 0.4, 0.5], 4) == [0.2, 0.3, 0.4, 0.5]
-    assert synthesize_samples([0.5], 0) == []
-
-
-def test_word_positions_are_centred():
-    positions = word_positions([10.0, 20.0], 5.0, 100.0)
-    assert positions == [32.5, 47.5]
-    assert word_positions([], 5.0, 100.0) == []
-
-
-def test_an_rtl_transcript_is_laid_out_from_the_right():
-    # "سلام دنیا" — the first word is the rightmost one
-    positions = word_positions([10.0, 20.0], 5.0, 100.0, ["rtl", "rtl"], "rtl")
-    assert positions == [57.5, 32.5]
-
-
-def test_the_english_words_of_a_mixed_transcript_keep_their_order():
-    # "من با Python code کردم" — the two English words stay side by side in
-    # their own order, the Persian words keep theirs
-    directions = ["rtl", "ltr", "ltr", "rtl"]
-    positions = word_positions([10.0] * 4, 5.0, 100.0, directions, "rtl")
-    # visual order, left to right: code-ish run, then the Persian words
-    assert positions[1] < positions[2]  # Python before code
-    assert positions[3] < positions[0]  # the last Persian word is leftmost
-    assert positions[0] > positions[2]  # the first Persian word is rightmost
-
-
-def test_the_words_stay_centred_whatever_the_direction_is():
-    ltr = word_positions([10.0, 20.0, 30.0], 5.0, 100.0, ["ltr"] * 3, "ltr")
-    rtl = word_positions([10.0, 20.0, 30.0], 5.0, 100.0, ["rtl"] * 3, "rtl")
-    assert ltr == [15.0, 30.0, 55.0]
-    assert rtl == [75.0, 50.0, 15.0]
-
-
-def test_total_width_counts_the_spaces_between_the_words():
-    assert total_width([], 5.0) == 0.0
-    assert total_width([(None, 10.0), (None, 20.0)], 5.0) == 35.0
-
-
 # ---------------------------------------------------------------- window surface
 
 
@@ -489,20 +633,16 @@ def test_the_opacity_setting_is_read_from_the_config():
     assert settings.opacity == pytest.approx(0.4)
 
 
-def test_the_settings_reach_the_visualization():
+def test_the_settings_reach_the_palette():
     """The chain from the config to the pixels, without a compositor."""
     cfg = OverlayConfig(opacity=0.5, animations=False, accent="#ff8800")
     settings = resolve_settings(cfg)
 
     palette = style_palette(resolve_palette(cfg.theme), settings.accent, settings.opacity)
-    viz = create_visualization("pill", palette)
-    viz.set_surface_opacity(settings.opacity)
-    viz.set_animated(settings.animated)
 
-    assert viz.palette.accent == hex_to_rgba("#ff8800")
-    assert viz.palette.background[3] == pytest.approx(0.96 * 0.5)
-    assert viz.surface_opacity == pytest.approx(0.5)
-    assert viz.state_manager.animated is False
+    assert palette.accent == hex_to_rgba("#ff8800")
+    assert palette.background[3] == pytest.approx(palette.background[3])
+    assert settings.animated is False
 
 
 # ---------------------------------------------------------------- overlay.show_audio_meter
@@ -519,42 +659,6 @@ def test_the_audio_meter_switch_is_read_from_the_config():
 
 
 # ---------------------------------------------------------------- overlay.animations
-
-
-def test_the_state_envelope_is_constant_without_animations():
-    manager = StateManager(animated=False)
-    manager.set_state_from_string("recording")
-    assert manager.get_animation_value() == 1.0
-    # the phase does not matter either
-    manager.animation_phase = 1.234
-    assert manager.get_animation_value() == 1.0
-
-
-def test_the_phase_stops_advancing_without_animations():
-    manager = StateManager(animated=False)
-    manager.update(1.0)
-    assert manager.animation_phase == 0.0
-
-
-def test_the_animations_can_be_switched_at_runtime():
-    manager = StateManager()
-    manager.set_state_from_string("error")
-    manager.animation_phase = 0.0
-    strobing = manager.get_animation_value()
-    manager.animation_phase = math.pi / 4
-    assert manager.get_animation_value() != strobing
-
-    manager.set_animated(False)
-    assert manager.get_animation_value() == 1.0
-    assert manager.animated is False
-
-
-def test_the_visualization_passes_the_animation_switch_on():
-    viz = create_visualization("pill")
-    viz.set_state("recording")
-    viz.set_animated(False)
-    assert viz.state_manager.animated is False
-    assert viz.state_manager.get_animation_value() == 1.0
 
 
 def test_the_animation_switch_makes_the_fade_instant():
@@ -681,6 +785,7 @@ def test_the_sound_setting_is_read_from_the_config():
 
 def test_a_palette_name_has_nothing_to_watch():
     assert theme_file("tokyo-night") is None
+    assert theme_file("nocturne") is None
     assert theme_file("dark") is None
     assert theme_file("") is None
 
@@ -726,12 +831,15 @@ def test_a_failing_reload_does_not_stop_the_watcher(tmp_path):
 
 
 def _bare_overlay_with_theme(css_path, opacity=1.0):
-    """A ``GtkOverlay`` with a theme, a visualization and no drawing area."""
+    """A ``GtkOverlay`` with a theme, a palette and no drawing area."""
+    from voicetype.ui.hud import ColorTween
+
     overlay = GtkOverlay.__new__(GtkOverlay)
     overlay._theme = Theme(str(css_path))
     overlay._accent = ""
     overlay._opacity = opacity
-    overlay._viz = create_visualization("pill")
+    overlay._state = HudState.LISTENING
+    overlay._tint = ColorTween(0.2)
     overlay._area = None
     overlay.palette = style_palette(overlay._theme.palette, overlay._accent, overlay._opacity)
     return overlay
@@ -742,15 +850,14 @@ def test_a_theme_change_reloads_the_palette(tmp_path):
     css.write_text("@define-color accent-color #7aa2f7;\n", encoding="utf-8")
     overlay = _bare_overlay_with_theme(css)
 
-    assert overlay.palette.background[:3] == PALETTES["tokyo-night"].background[:3]
+    # a CSS theme starts from the default palette
+    assert overlay.palette.background[:3] == PALETTES["nocturne"].background[:3]
 
     css.write_text("@define-color background-color #ff0000;\n", encoding="utf-8")
     os.utime(css, (0, 0))
     overlay._on_theme_changed()
 
     assert overlay.palette.background[0] == pytest.approx(1.0)
-    # the visualization got the new palette too
-    assert overlay._viz.palette.background[0] == pytest.approx(1.0)
 
 
 def test_a_theme_change_keeps_the_accent_and_the_opacity(tmp_path):
@@ -766,7 +873,6 @@ def test_a_theme_change_keeps_the_accent_and_the_opacity(tmp_path):
     assert overlay.palette.accent == hex_to_rgba("#ff8800")
     # the CSS background replaces the palette's alpha, which is then scaled
     assert overlay.palette.background[3] == pytest.approx(0.5)
-    assert overlay._viz.surface_opacity == pytest.approx(0.5)
 
 
 def test_a_broken_theme_change_keeps_the_old_palette(tmp_path):
@@ -811,4 +917,3 @@ def test_the_ui_layer_does_not_import_gtk_cairo_or_numpy_at_module_level(path):
     forbidden = ("gi", "gi.repository", "cairo", "numpy")
     for name in _module_level_imports(path):
         assert name.split(".")[0] not in {f.split(".")[0] for f in forbidden}, name
-

@@ -121,18 +121,18 @@ class OverlayConfig:
     anchor_horizontal: str = "center"  # left | center | right
     offset_x: int = 0
     offset_y: int = 50
-    theme: str = "dark"
+    theme: str = "nocturne"
     opacity: float = 0.86
-    width: int = 360
-    height: int = 96
+    width: int = 360  # the fixed width of the card
+    height: int = 128  # the fixed height of the card
     show_partial_text: bool = True
     show_audio_meter: bool = True
     font: str = DEFAULT_FONT
     font_size: float = DEFAULT_FONT_SIZE  # point size of the overlay's main text
-    style: str = "pill"  # pill | waveform | vu_meter
+    style: str = "hud"  # deprecated: the card has one shape now
     animations: bool = True  # master switch for the animated transitions
-    show_transcript: bool = True  # live word-by-word transcript above the pill
-    transcript_words: int = 4  # how many words the live preview keeps
+    show_transcript: bool = True  # live word-by-word transcript on the card
+    transcript_words: int = 8  # how many words the live preview keeps
     accent: str = ""  # hex override for the accent colour; "" = palette default
     fade_ms: int = 140  # show/hide fade duration in milliseconds
     sounds: bool = False  # audible start/stop/error cues
@@ -200,6 +200,7 @@ THEME_NAMES = (
     "catppuccin-mocha",
     "dracula",
     "gruvbox-dark",
+    "nocturne",
     "nord",
     "rose-pine",
     "tokyo-night",
@@ -223,7 +224,9 @@ _ENUMS: dict[str, tuple[str, ...]] = {
     "overlay.position": ("top", "center", "bottom"),
     "overlay.anchor_horizontal": ("left", "center", "right"),
     "overlay.theme": LEGACY_THEME_NAMES + THEME_NAMES,
-    "overlay.style": ("pill", "waveform", "vu_meter"),
+    # ``overlay.style`` chose between the old visualizations.  The floating
+    # HUD has one shape now, so the key is accepted but ignored.
+    "overlay.style": ("hud", "pill", "waveform", "vu_meter"),
     "injector.backend": ("auto", "paste", "wtype", "ydotool", "xdotool"),
     "injector.paste_shortcut": ("auto", "ctrl+v", "ctrl+shift+v"),
     "postprocess.digits": ("keep", "latin", "persian"),
@@ -475,18 +478,18 @@ position = "bottom"
 anchor_horizontal = "center"
 offset_x = 0
 offset_y = 50
-theme = "dark"             # palette name (tokyo-night, nord, …), legacy dark/light, or a .css path
+theme = "nocturne"         # palette name (nocturne, tokyo-night, nord, …), legacy dark/light, or a .css path
 opacity = 0.86
-width = 360
-height = 96
+width = 360                # the fixed width of the card
+height = 128               # the fixed height of the card
 show_partial_text = true
 show_audio_meter = true
 font = ""                   # empty = the system's own font; e.g. "JetBrains Mono"
 font_size = 0.0             # 0 = the system's own size; otherwise in points
-style = "pill"             # pill | waveform | vu_meter
+style = "hud"              # deprecated: the card has one shape now
 animations = true          # master switch for the animated transitions
-show_transcript = true     # live word-by-word transcript above the pill
-transcript_words = 4       # how many words the live preview keeps
+show_transcript = true     # live word-by-word transcript on the card
+transcript_words = 8       # how many words the live preview keeps
 accent = ""                # hex accent override, e.g. "#7aa2f7"; "" = palette default
 fade_ms = 140              # show/hide fade duration in milliseconds
 sounds = false             # audible start/stop/error cues

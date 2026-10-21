@@ -1,4 +1,4 @@
-"""Dispatcher: the IDLE → LISTENING → TRANSCRIBING → INJECTING → IDLE state machine.
+"""Dispatcher: the IDLE → LISTENING → TRANSCRIBING → TRANSLATING → INJECTING → IDLE state machine.
 
 All transitions happen under one lock and are logged. UI calls go through the ``Overlay``
 protocol, which implementations make thread-safe (GLib.idle_add), so no GUI thread is needed here.
@@ -34,11 +34,15 @@ log = get_logger("dispatcher")
 ERROR_DISPLAY_SECONDS = 2.0
 SUCCESS_DISPLAY_SECONDS = 1.2
 
+#: A translation stays on the card longer: the sentence has to be readable.
+SUCCESS_TRANSLATION_SECONDS = 2.2
+
 
 class State(enum.Enum):
     IDLE = "idle"
     LISTENING = "listening"
     TRANSCRIBING = "transcribing"
+    TRANSLATING = "translating"
     INJECTING = "injecting"
 
 
@@ -48,9 +52,10 @@ class Overlay(Protocol):
     def set_partial(self, text: str) -> None: ...
     def set_audio_level(self, level: float) -> None: ...
     def show_processing(self) -> None: ...
+    def show_translating(self, text: str) -> None: ...
     def show_error(self, message: str) -> None: ...
     def show_warning(self, message: str) -> None: ...
-    def show_success(self, text: str = "") -> None: ...
+    def show_success(self, text: str = "", language: str = "") -> None: ...
     def hide(self) -> None: ...
 
 
@@ -61,9 +66,10 @@ class NullOverlay:
     def set_partial(self, text: str) -> None: ...
     def set_audio_level(self, level: float) -> None: ...
     def show_processing(self) -> None: ...
+    def show_translating(self, text: str) -> None: ...
     def show_error(self, message: str) -> None: ...
     def show_warning(self, message: str) -> None: ...
-    def show_success(self, text: str = "") -> None: ...
+    def show_success(self, text: str = "", language: str = "") -> None: ...
     def hide(self) -> None: ...
 
 
@@ -76,6 +82,9 @@ class Components:
     injector: Any  # .inject(text)
     pipeline: Callable[[str], str]
     translator: Any = None  # .translate(text) / .close(); None when translation is off
+    #: The transcript as it was spoken, before it is translated.  The overlay
+    #: shows it while the translation is being made.
+    source: Callable[[str], str] | None = None
 
 
 def close_quietly(obj: Any) -> None:
@@ -378,6 +387,15 @@ class Dispatcher:
             result = self._run_stt(pcm, cancel)
             if session != self._session:
                 return  # cancelled meanwhile
+            if self._c.translator is not None:
+                # The translation is a network round-trip: the card shows the
+                # source while it runs, so the wait never looks like a stall.
+                source = self._source_text(result.text)
+                with self._lock:
+                    if session != self._session:
+                        return
+                    self._set_state(State.TRANSLATING, "stt done")
+                self.overlay.show_translating(source)
             text = self._c.pipeline(result.text)
             if not text.strip():
                 raise STTUnintelligibleError("empty after post-processing")
@@ -408,6 +426,24 @@ class Dispatcher:
             if session == self._session:
                 self._set_state(State.IDLE, "done")
                 self._apply_pending_locked()
+
+    def _source_text(self, text: str) -> str:
+        """The transcript as it was spoken, before it is translated.
+
+        The post-processing is a pure function of the text, so running it
+        twice — once for the card, once for the pipeline — gives the same
+        result both times.  A spoken command ("new line") post-processes to
+        a newline: there is nothing to show, so the card stays empty.
+        """
+        source = self._c.source
+        if source is None:
+            return text
+        try:
+            result = source(text)
+        except Exception:  # noqa: BLE001 - the card is a nicety, the text is not
+            log.exception("the source pipeline failed")
+            return text
+        return result if result.strip() else ""
 
     def _run_stt(self, pcm: bytes, cancel: CancelToken | None) -> STTResult:
         stream, thread, q = self._stream, self._stream_thread, self._stream_q
@@ -449,20 +485,33 @@ class Dispatcher:
         timer.start()
 
     def _show_success(self, session: int, text: str) -> None:
-        """Confirm the injection, then hide the overlay again after a short delay."""
+        """Confirm the injection, then hide the overlay again after a short delay.
+
+        A translated result carries the name of its language, and stays on
+        the card longer: the sentence has to be readable.
+        """
+        language = self._language_label()
         with self._lock:
             if session != self._session:
                 return
-            self.overlay.show_success(text)
+            self.overlay.show_success(text, language)
 
         def later() -> None:
             with self._lock:
                 if session == self._session and self._state is State.IDLE:
                     self.overlay.hide()
 
-        timer = threading.Timer(self._success_display, later)
+        delay = SUCCESS_TRANSLATION_SECONDS if language else self._success_display
+        timer = threading.Timer(delay, later)
         timer.daemon = True
         timer.start()
+
+    def _language_label(self) -> str:
+        """The name of the language the transcript was translated into."""
+        translator = self._c.translator
+        if translator is None:
+            return ""
+        return str(getattr(translator, "label", "") or "")
 
     def _release_media(self) -> None:
         if self._media is not None:

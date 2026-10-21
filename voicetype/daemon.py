@@ -49,8 +49,12 @@ def build_components(cfg: Config, on_warning=None) -> Components:
         proxy=network.httpx_proxy_url(network.effective_proxy(cfg.network.proxy)),
         on_warning=on_warning,
     )
-    pipeline = translate_stage(Pipeline(cfg.postprocess), translator, cfg.postprocess)
-    return Components(cfg, backend, injector, pipeline, translator)
+    # The post-processing runs before the translation: the card shows the
+    # source while the translation is being made, so the source needs its own
+    # callable.
+    post = Pipeline(cfg.postprocess)
+    pipeline = translate_stage(post, translator, cfg.postprocess)
+    return Components(cfg, backend, injector, pipeline, translator, post)
 
 
 def audio_factory(on_chunk, cfg: Config, on_error=None) -> AudioCapture:

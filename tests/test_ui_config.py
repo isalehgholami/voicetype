@@ -38,10 +38,10 @@ from voicetype.notify import Notifier
 
 def test_new_overlay_defaults():
     cfg = OverlayConfig()
-    assert cfg.style == "pill"
+    assert cfg.style == "hud"
     assert cfg.animations is True
     assert cfg.show_transcript is True
-    assert cfg.transcript_words == 4
+    assert cfg.transcript_words == 8
     assert cfg.accent == ""
     assert cfg.fade_ms == 140
     assert cfg.sounds is False
@@ -54,10 +54,14 @@ def test_existing_overlay_defaults_are_unchanged():
     assert cfg.position == "bottom"
     assert cfg.anchor_horizontal == "center"
     assert (cfg.offset_x, cfg.offset_y) == (0, 50)
-    assert cfg.theme == "dark"
     assert cfg.opacity == 0.86
-    assert (cfg.width, cfg.height) == (360, 96)
+    # the card has a fixed size: it does not follow the text it holds
+    assert (cfg.width, cfg.height) == (360, 128)
     assert cfg.show_partial_text is True and cfg.show_audio_meter is True
+
+
+def test_the_default_theme_is_the_one_the_card_was_designed_for():
+    assert OverlayConfig().theme == "nocturne"
 
 
 def test_the_overlay_font_follows_the_system_by_default():

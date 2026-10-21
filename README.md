@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Arch%20%2B%20KDE%20Plasma%206-1793D1?logo=archlinux&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-734_passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-739_passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 [Features](#features) · [How it works](#how-it-works) · [Requirements](#requirements) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Providers](#speech-providers) · [Development](#development) · [Troubleshooting](#troubleshooting) · [فارسی](README.fa.md)
@@ -21,12 +21,12 @@
 - **Mixed Persian and English.** Persian transliterations of technical terms are normalised to their canonical Latin spelling: «پایتون» becomes `Python`, «گیت‌هاب» becomes `GitHub`. 44 canonical terms covering 62 Persian spellings; further mappings can be added through `[postprocess.custom_replacements]`.
 - **Optional translation.** Transcripts can be translated into English or any other supported language before they are injected. Disabled by default.
 - **Injection into any application.** Text is delivered by clipboard paste (Wayland: `wl-copy` with `ydotool`; X11: `xclip` with `xdotool`) or by direct keystroke injection (`wtype`, `ydotool`, `xdotool`). The previous clipboard contents are restored afterwards.
-- **Floating overlay.** GTK4 with the `wlr-layer-shell` protocol, so it never takes focus and clicks pass through. Three visualisation styles (`pill`, `waveform`, `vu_meter`), animated states for recording, paused, processing, error, and success, and a live word-by-word transcript preview. Themed from a built-in palette or your own CSS file, see [theming](docs/theming.md).
+- **Floating overlay.** GTK4 with the `wlr-layer-shell` protocol, so it never takes focus and clicks pass through. One minimal dark HUD card that only displays: a status row, the text that matters, and a slim waveform that follows the microphone. It shows listening, transcribing, translating, translated, idle and failed states — and never asks for a click. The card has a fixed size: the text lives in a box inside it and rolls through it, so the overlay never resizes while you talk. Themed from a built-in palette or your own CSS file, see [theming](docs/theming.md).
 - **Four speech engines.** Google (free, online), Vosk (offline, streaming), Whisper (offline, most accurate), Google Cloud. Automatic fallback to a secondary provider after repeated failures.
 - **Adaptive stop.** Silence detection calibrates against the noise floor of the room instead of using a fixed threshold.
 - **Predictable security posture.** The control socket is created with mode `0600`, control characters are stripped from transcripts, and transcribed text is never passed to a shell or evaluated.
 - **Self-diagnosing.** `voicetype doctor` inspects the environment and prints the exact command needed to fix each missing dependency.
-- **Tested.** 734 automated tests. The core runs without a microphone, network access, or a display server.
+- **Tested.** 739 automated tests. The core runs without a microphone, network access, or a display server.
 
 > **Status: v0.1.** The core is covered by unit and integration tests, but the parts that require a real desktop session (overlay rendering, shortcut registration, paste injection, microphone capture) can only be verified on your own machine. Run `voicetype doctor` first and read [docs/inject-matrix.md](docs/inject-matrix.md) for the results recorded so far.
 
@@ -39,7 +39,7 @@
        ▼                                ▼                         ▼
   AudioCapture                     Dispatcher                  Overlay
  16 kHz mono mic          IDLE → LISTENING → TRANSCRIBING      (GTK4 layer-shell)
-       │                       → INJECTING → IDLE
+       │                       → TRANSLATING → INJECTING → IDLE
        ▼                                │
  Silence detector                       ▼
        │              STT provider ─► Post-processing ─► Translation ─► Text injector
@@ -330,19 +330,19 @@ The provider-specific sub-tables `[stt.vosk]`, `[stt.whisper]`, and `[stt.google
 | `anchor_horizontal` | `"center"` | Horizontal anchor: `left`, `center`, or `right`. |
 | `offset_x` | `0` | Horizontal offset in pixels. Range −1920 to 1920. |
 | `offset_y` | `50` | Vertical offset in pixels. Range −1080 to 1080. |
-| `theme` | `"dark"` | A palette name (`tokyo-night`, `nord`, `dracula`, `catppuccin-mocha`, `rose-pine`, `gruvbox-dark`, `tokyo-night-light`), the legacy values `dark` or `light`, or the path to a `.css` file. See [theming](docs/theming.md). |
+| `theme` | `"nocturne"` | A palette name (`nocturne`, `tokyo-night`, `nord`, `dracula`, `catppuccin-mocha`, `rose-pine`, `gruvbox-dark`, `tokyo-night-light`), the legacy values `dark` or `light`, or the path to a `.css` file. See [theming](docs/theming.md). |
 | `accent` | `""` | Hex colour that overrides the accent of the palette, for example `"#ff8800"`. Empty means the palette decides. |
 | `opacity` | `0.86` | Opacity of the card the overlay draws on. Range 0.0 to 1.0. |
-| `width` | `360` | Overlay width in pixels. Range 120 to 1920. |
-| `height` | `96` | Overlay height in pixels. Range 48 to 480. |
-| `style` | `"pill"` | Visualisation style: `pill`, `waveform`, or `vu_meter`. The `pill` style paints fixed colours, so the palette only shows in the other two styles. |
+| `width` | `360` | The fixed width of the card, in pixels. The card never resizes with the text it holds. Range 120 to 1920. |
+| `height` | `128` | The fixed height of the card, in pixels. Range 48 to 480. |
+| `style` | `"hud"` | Deprecated and ignored: the card has one shape now. |
 | `animations` | `true` | Master switch for motion. `false` makes every state change instant. |
-| `show_audio_meter` | `true` | Whether the visualisation reacts to the microphone level. |
-| `show_transcript` | `true` | Whether the live word-by-word preview is shown above the overlay. |
+| `show_audio_meter` | `true` | Whether the waveform reacts to the microphone level. |
+| `show_transcript` | `true` | Whether the live word-by-word preview is shown on the card. |
 | `show_partial_text` | `true` | Whether partial results are rendered at all. Both this and `show_transcript` must be enabled for the preview. |
-| `transcript_words` | `4` | How many words the live preview keeps. Range 1 to 12. |
+| `transcript_words` | `8` | How many words the live preview keeps. Range 1 to 12. |
 | `font` | `""` | The font family every text of the overlay is drawn with. Empty — the default — means the system font, the family the desktop settings ask for. A value such as `"JetBrains Mono"` picks a face instead. |
-| `font_size` | `0.0` | The point size of the main text, the live transcript. Zero — the default — means the system's own font size, multiplied by 1.6 so the OSD is readable at a glance; a value sets the size in points. The status labels are drawn at 70 % of it. |
+| `font_size` | `0.0` | The point size of the main text. Zero — the default — means the system's own font size, clamped into the band the card was designed for; a value sets the size in points. The status labels are drawn at 72 % of it. |
 | `fade_ms` | `140` | Duration of the show and hide transition in milliseconds. Range 0 to 1000. |
 | `sounds` | `false` | Play an audible cue when recording starts, stops, or fails. |
 
@@ -445,18 +445,18 @@ position = "bottom"
 anchor_horizontal = "center"
 offset_x = 0
 offset_y = 50
-theme = "dark"             # palette name (tokyo-night, nord, …), legacy dark/light, or a .css path
+theme = "nocturne"         # palette name (nocturne, tokyo-night, nord, …), legacy dark/light, or a .css path
 opacity = 0.86
-width = 360
-height = 96
+width = 360                # the fixed width of the card
+height = 128               # the fixed height of the card
 show_partial_text = true
 show_audio_meter = true
 font = ""                   # empty = the system's own font; e.g. "JetBrains Mono"
 font_size = 0.0             # 0 = the system's own size; otherwise in points
-style = "pill"             # pill | waveform | vu_meter
+style = "hud"              # deprecated: the card has one shape now
 animations = true          # master switch for the animated transitions
-show_transcript = true     # live word-by-word transcript above the pill
-transcript_words = 4       # how many words the live preview keeps
+show_transcript = true     # live word-by-word transcript on the card
+transcript_words = 8       # how many words the live preview keeps
 accent = ""                # hex accent override, e.g. "#7aa2f7"; "" = palette default
 fade_ms = 140              # show/hide fade duration in milliseconds
 sounds = false             # audible start/stop/error cues
@@ -581,7 +581,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 ruff check . # lint
-pytest                # 756 tests; no microphone, network, or GUI required
+pytest                # 739 tests; no microphone, network, or GUI required
 ```
 
 The core (configuration, dispatcher, speech backends, post-processing, injector logic) runs on any operating system. GTK, `evdev`, and PortAudio are imported lazily, so the test suite needs none of them.

@@ -14,7 +14,7 @@ from ..config import PostprocessConfig, TranslateConfig
 from ..log import get_logger
 from ..postprocess.pipeline import auto_punctuate, capitalize_first
 from .base import TranslateError, Translator
-from .google import GoogleTranslator, language_tables, resolve_language
+from .google import GoogleTranslator, language_label, language_tables, resolve_language
 
 log = get_logger("translate")
 
@@ -23,6 +23,7 @@ __all__ = (
     "TranslateError",
     "Translator",
     "build_translator",
+    "language_label",
     "language_tables",
     "resolve_language",
     "translate_stage",

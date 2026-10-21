@@ -74,6 +74,26 @@ def resolve_language(
     )
 
 
+def language_label(code: str, tables: LanguageTables | None = None) -> str:
+    """The English name of a language code, upper-cased (``de`` → ``GERMAN``).
+
+    The overlay names the language of a translation in a small label.  The
+    tables of py-googletrans carry the names; without them the code itself
+    is the best label there is.
+    """
+    key = (code or "").strip().lower()
+    if not key:
+        return ""
+    try:
+        codes, _names = tables if tables is not None else language_tables()
+    except ConfigError:
+        return key.upper()
+    name = codes.get(key)
+    if name is None:
+        name = codes.get(key.replace("_", "-").split("-", 1)[0])
+    return str(name or key).upper()
+
+
 def _default_client_factory(proxy: str, timeout: float) -> Callable[[], Any]:
     """Build the py-googletrans client (imported lazily: it is optional)."""
 
@@ -125,6 +145,8 @@ class GoogleTranslator:
         self.timeout = timeout
         self.proxy = proxy
         self.on_warning = on_warning
+        #: The name of the target language, as the overlay shows it.
+        self.label = language_label(target)
         self._factory = client_factory or _default_client_factory(proxy, timeout)
         self._client: Any = None
         self._loop = asyncio.new_event_loop()
