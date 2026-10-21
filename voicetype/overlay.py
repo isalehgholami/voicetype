@@ -727,7 +727,9 @@ class GtkOverlay:
         with self._lock:
             hidden = self._mode == "hidden"
         if hidden and self._fade.settled:
-            self._win.set_visible(False)
+            win = self._win
+            if win is not None:
+                win.set_visible(False)
             self._timer = 0
             return False
         return True
@@ -778,6 +780,9 @@ class GtkOverlay:
     # ------------------------------------------------------------------ state
     def _apply(self, mode: str, text: str | None = None) -> bool:
         """Switch the overlay to ``mode`` (runs on the GTK thread)."""
+        win = self._win
+        if win is None:
+            return False  # the overlay was closed
         with self._lock:
             previous_mode = self._mode
             self._mode = mode
@@ -802,8 +807,8 @@ class GtkOverlay:
             self._fade.set_target(0.0)
         else:
             self._fade.set_target(1.0)
-            if not self._win.get_visible():
-                self._win.present()
+            if not win.get_visible():
+                win.present()
                 self._make_click_through()
             if mode == "success":
                 self._schedule_success_hide()
@@ -1070,9 +1075,9 @@ class GtkOverlay:
         """Tear the overlay down.
 
         The theme watcher and the sound player own resources outside the
-        overlay, so they are released here; the GTK loop is asked to quit so
-        the overlay's thread ends with it.  Everything is guarded: tearing
-        down must never raise.
+        overlay, so they are released here; the window is destroyed and the GTK
+        loop is asked to quit so the overlay's thread ends with it.  Everything
+        is guarded: tearing down must never raise.
         """
         watcher = self._watcher
         self._watcher = None
@@ -1081,6 +1086,13 @@ class GtkOverlay:
                 watcher.stop()
             except Exception:  # noqa: BLE001 - shutting down anyway
                 log.debug("theme watcher stop failed", exc_info=True)
+
+        # the overlay may be replaced by a new one (a reload): its exit hook
+        # must not pile up
+        try:
+            atexit.unregister(self.close)
+        except Exception:  # noqa: BLE001 - never fatal
+            pass
 
         with self._sounds_lock:
             sounds = self._sounds
@@ -1092,9 +1104,24 @@ class GtkOverlay:
                 log.debug("sound player close failed", exc_info=True)
 
         try:
+            self._post(self._destroy_window)
             self._post(self._quit_loop)
         except Exception:  # noqa: BLE001 - the loop may already be gone
             log.debug("could not quit the GTK loop", exc_info=True)
+
+    def _destroy_window(self) -> bool:
+        """Destroy the layer-shell surface (runs on the GTK thread).
+
+        The surface belongs to the compositor: without an explicit destroy it
+        stays on the screen when the overlay is replaced by a new one.
+        """
+        win, self._win = self._win, None
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:  # noqa: BLE001 - tearing down anyway
+                log.debug("could not destroy the overlay window", exc_info=True)
+        return False
 
     def _quit_loop(self) -> bool:
         loop = self._loop

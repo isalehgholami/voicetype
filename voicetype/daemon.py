@@ -8,9 +8,9 @@ from pathlib import Path
 
 from . import __version__, network
 from .audio import AudioCapture
-from .config import Config, ConfigError, ConfigManager
+from .config import Config, ConfigManager
 from .control import ControlServer
-from .dispatcher import Components, Dispatcher
+from .dispatcher import Components, Dispatcher, NullOverlay, Overlay, close_quietly
 from .injector import InjectionError, TextInjector
 from .log import get_logger, setup_logging
 from .media import MediaPauser
@@ -68,11 +68,16 @@ class Daemon:
         self.manager = ConfigManager(config_path)
         cfg = self.manager.get()
         setup_logging(cfg.log_level)
-        self.overlay = create_overlay(cfg.overlay)
+        overlay = create_overlay(cfg.overlay)
+        # the configuration the overlay was built from — a reload only rebuilds
+        # it when these values actually changed
+        self._overlay_cfg = cfg.overlay
+        self._hotkey_cfg = cfg.hotkey
+        self._log_level = cfg.log_level
         self.dispatcher = Dispatcher(
             build_components(cfg, on_warning=self._on_warning),
             audio_factory,
-            self.overlay,
+            overlay,
             build=lambda c: build_components(c, on_warning=self._on_warning),
             media=MediaPauser(),
             notifier=Notifier(),
@@ -80,6 +85,11 @@ class Daemon:
         self.control = ControlServer(self.handle_command)
         self._stop = threading.Event()
         self._hotkey = None
+
+    @property
+    def overlay(self) -> Overlay:
+        """The overlay the daemon is currently using (a reload may replace it)."""
+        return self.dispatcher.overlay
 
     def _on_warning(self, message: str) -> None:
         self.dispatcher.warn(message)
@@ -116,22 +126,72 @@ class Daemon:
         try:
             target = self.manager.next_profile() if arg == "next" else (None if arg == "default" else arg)
             cfg = self.manager.set_profile(target)
-            result = self.dispatcher.reload_config(cfg)
+            result = self._apply_config(cfg)
         except Exception as e:  # noqa: BLE001 - bad profile: old config stays active
             log.error("profile switch failed: %s", e)
             return f"error {e}"
+        self._after_config(cfg)
         log.info("profile -> %s", target or "default")
         return f"{result} profile={target or 'default'}"
 
     def reload(self) -> str:
+        """Re-read the configuration file and apply it to the running daemon."""
         try:
             cfg = self.manager.reload()
-            result = self.dispatcher.reload_config(cfg)
-        except (ConfigError, Exception) as e:  # noqa: BLE001 - old config stays active
+            result = self._apply_config(cfg)
+        except Exception as e:  # noqa: BLE001 - old config stays active
             log.error("reload failed: %s", e)
             return f"error {e}"
+        self._after_config(cfg)
         log.info("configuration reloaded")
         return result
+
+    def _apply_config(self, cfg: Config) -> str:
+        """Hand a new configuration to the dispatcher: components and overlay.
+
+        The overlay is only rebuilt when its own settings changed — a reload
+        that touches the STT settings must not tear the window down.  A new
+        overlay that cannot be built (no GTK, no display) never replaces the
+        one that works.
+        """
+        overlay = self._new_overlay(cfg)
+        try:
+            return self.dispatcher.reload_config(cfg, overlay=overlay)
+        except Exception:
+            close_quietly(overlay)  # the swap never happened: do not leak it
+            raise
+
+    def _new_overlay(self, cfg: Config) -> Overlay | None:
+        """An overlay for the new configuration; None when the current one still fits."""
+        if cfg.overlay == self._overlay_cfg:
+            return None
+        overlay = create_overlay(cfg.overlay)
+        if (
+            cfg.overlay.enabled
+            and isinstance(overlay, NullOverlay)
+            and not isinstance(self.overlay, NullOverlay)
+        ):
+            log.warning("the overlay could not be rebuilt — keeping the current one")
+            return None
+        self._overlay_cfg = cfg.overlay
+        return overlay
+
+    def _after_config(self, cfg: Config) -> None:
+        """Apply the parts of the configuration the dispatcher does not own."""
+        if cfg.log_level != self._log_level:
+            self._log_level = cfg.log_level
+            setup_logging(cfg.log_level)
+        self._apply_hotkey(cfg)
+
+    def _apply_hotkey(self, cfg: Config) -> None:
+        """Restart the hold-mode listener when its configuration changed."""
+        if self._hotkey_cfg == cfg.hotkey:
+            return
+        self._hotkey_cfg = cfg.hotkey
+        if self._hotkey is not None:
+            self._hotkey.stop()
+            self._hotkey = None
+        self._start_hotkey(cfg)
 
     # ------------------------------------------------------------------ lifecycle
     def run(self) -> int:

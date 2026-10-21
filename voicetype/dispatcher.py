@@ -78,8 +78,8 @@ class Components:
     translator: Any = None  # .translate(text) / .close(); None when translation is off
 
 
-def _close_quietly(obj: Any) -> None:
-    """Close a component (backend, translator) without letting it break the daemon."""
+def close_quietly(obj: Any) -> None:
+    """Close a component (backend, translator, overlay) without letting it break the daemon."""
     close = getattr(obj, "close", None)
     if close is None:
         return
@@ -121,6 +121,7 @@ class Dispatcher:
         self._acc = LevelAccumulator()
         self._samples = 0
         self._pending: Components | None = None
+        self._pending_overlay: Overlay | None = None
         self._worker: threading.Thread | None = None
 
     # ------------------------------------------------------------------ introspection
@@ -233,20 +234,33 @@ class Dispatcher:
             self._apply_pending_locked()
             return "ok cancelled"
 
-    def reload_config(self, new_config: Config) -> str:
-        """Rebuild components for ``new_config``; applied now if idle, otherwise after the cycle."""
+    def reload_config(self, new_config: Config, overlay: Overlay | None = None) -> str:
+        """Rebuild components for ``new_config``; applied now if idle, otherwise after the cycle.
+
+        ``overlay`` replaces the overlay when the configuration changed it.  It is
+        swapped in together with the components, so the daemon never shows two
+        overlays at the same time and a running session keeps the overlay it
+        started with.
+        """
         if self._build is None:
             return "error reload unsupported"
         comps = self._build(new_config)  # may raise → caller reports, old config stays
         with self._lock:
             self._pending = comps
+            if overlay is not None:
+                # a second reload before the first one was applied replaces the
+                # waiting overlay: the old one is closed instead of leaked
+                stale, self._pending_overlay = self._pending_overlay, overlay
+                close_quietly(stale)
             if self._state is State.IDLE:
                 self._apply_pending_locked()
                 return "ok reloaded"
             return "ok reload queued"
 
     def _apply_pending_locked(self) -> None:
-        if self._pending is not None and self._state is State.IDLE:
+        if self._state is not State.IDLE:
+            return
+        if self._pending is not None:
             old, self._c, self._pending = self._c, self._pending, None
             if old.backend is not self._c.backend:
                 try:
@@ -254,8 +268,13 @@ class Dispatcher:
                 except Exception:  # noqa: BLE001
                     log.exception("closing old backend failed")
             if old.translator is not self._c.translator:
-                _close_quietly(old.translator)
+                close_quietly(old.translator)
             log.info("configuration applied")
+        overlay, self._pending_overlay = self._pending_overlay, None
+        if overlay is not None:
+            old_overlay, self.overlay = self.overlay, overlay
+            close_quietly(old_overlay)
+            log.info("overlay replaced")
 
     # ------------------------------------------------------------------ audio path (audio thread)
     def _on_chunk(self, session: int, chunk: bytes) -> None:
@@ -466,4 +485,5 @@ class Dispatcher:
             self._c.backend.close()
         except Exception:  # noqa: BLE001
             log.exception("backend close failed")
-        _close_quietly(self._c.translator)
+        close_quietly(self._c.translator)
+        close_quietly(self.overlay)

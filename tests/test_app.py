@@ -43,6 +43,49 @@ def daemon(tmp_path, monkeypatch):
     return Daemon()
 
 
+class FakeOverlay:
+    """Stands in for the GTK overlay: it only remembers its configuration."""
+
+    def __init__(self, cfg=None):
+        self.cfg = cfg
+        self.closed = False
+
+    def show_listening(self): ...
+    def set_partial(self, text): ...
+    def set_audio_level(self, level): ...
+    def show_processing(self): ...
+    def show_error(self, message): ...
+    def show_warning(self, message): ...
+    def show_success(self, text=""): ...
+    def hide(self): ...
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def overlay_daemon(tmp_path, monkeypatch):
+    """A daemon whose overlay is a fake — the real one needs a display."""
+    monkeypatch.setenv("VOICETYPE_CONFIG", str(tmp_path / "c.toml"))
+    (tmp_path / "c.toml").write_text('[overlay]\nenabled = false\n[stt]\nfallback_provider = ""\n', encoding="utf-8")
+    monkeypatch.setattr("voicetype.daemon.setup_logging", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "voicetype.daemon.ControlServer",
+        lambda handler: type("S", (), {"start": lambda s: None, "stop": lambda s: None})(),
+    )
+    built: list[FakeOverlay] = []
+
+    def create(cfg):
+        if not cfg.enabled:
+            return NullOverlay()
+        overlay = FakeOverlay(cfg)
+        built.append(overlay)
+        return overlay
+
+    monkeypatch.setattr("voicetype.daemon.create_overlay", create)
+    return Daemon(), built, tmp_path / "c.toml"
+
+
 def test_daemon_commands(daemon):
     assert daemon.handle_command("status").startswith("ok idle provider=google_free")
     assert daemon.handle_command("cancel") == "ok idle"
@@ -59,6 +102,69 @@ def test_daemon_reload_applies_and_survives_bad_config(daemon, tmp_path):
     p.write_text("[stt]\nprovider = 'nope'\n", encoding="utf-8")
     assert daemon.handle_command("reload").startswith("error")
     assert daemon.dispatcher.components.backend.name == "vosk"  # old config still active
+
+
+def test_reload_rebuilds_the_overlay_when_its_settings_change(overlay_daemon):
+    d, built, path = overlay_daemon
+    path.write_text('[overlay]\nenabled = true\nwidth = 640\n[stt]\nfallback_provider = ""\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert len(built) == 1 and built[0].cfg.width == 640
+    assert d.overlay is built[0]  # the daemon draws with the new settings
+
+
+def test_reload_keeps_the_overlay_when_its_settings_did_not_change(overlay_daemon):
+    d, built, path = overlay_daemon
+    path.write_text('[overlay]\nenabled = false\n[stt]\nlanguage = "en-US"\nfallback_provider = ""\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert not built  # the overlay was not touched
+    assert d.dispatcher.components.config.stt.language == "en-US"  # the rest was applied
+
+
+def test_reload_can_turn_the_overlay_off(overlay_daemon):
+    d, built, path = overlay_daemon
+    path.write_text('[overlay]\nenabled = true\n[stt]\nfallback_provider = ""\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert d.overlay is built[0]
+    path.write_text('[overlay]\nenabled = false\n[stt]\nfallback_provider = ""\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert isinstance(d.overlay, NullOverlay)
+    assert built[0].closed  # the window is gone
+
+
+def test_reload_applies_the_new_log_level(overlay_daemon, monkeypatch):
+    d, _built, path = overlay_daemon
+    levels = []
+    monkeypatch.setattr("voicetype.daemon.setup_logging", lambda level: levels.append(level))
+    path.write_text('log_level = "DEBUG"\n[overlay]\nenabled = false\n[stt]\nfallback_provider = ""\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert levels == ["DEBUG"]
+
+
+def test_reload_restarts_the_hold_hotkey(overlay_daemon, monkeypatch):
+    d, _built, path = overlay_daemon
+    started = []
+
+    class FakeListener:
+        def __init__(self, combo, mode, *args, **kwargs):
+            started.append((combo, mode))
+
+        def start(self):
+            ...
+
+        def stop(self):
+            ...
+
+    monkeypatch.setattr("voicetype.hotkey.EvdevHotkeyListener", FakeListener)
+    path.write_text('[hotkey]\ntoggle_mode = "hold"\ncombo = "ctrl+space"\n[overlay]\nenabled = false\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert started == [("ctrl+space", "hold")]
+    # the same hotkey again does not restart the listener
+    assert d.handle_command("reload") == "ok reloaded"
+    assert len(started) == 1
+    # a new combo does
+    path.write_text('[hotkey]\ntoggle_mode = "hold"\ncombo = "ctrl+alt+v"\n[overlay]\nenabled = false\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert len(started) == 2 and started[1][0] == "ctrl+alt+v"
 
 
 def test_broken_injector_reports_reason():

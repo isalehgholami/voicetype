@@ -49,12 +49,17 @@ class FakeAudio:
 class Overlay:
     def __init__(self):
         self.events = []
+        self.closed = False
 
     def __getattr__(self, name):
         def rec(*a):
             self.events.append((name, *a))
 
         return rec
+
+    def close(self):
+        self.closed = True
+        self.events.append(("close",))
 
     def names(self):
         return [e[0] for e in self.events]
@@ -357,6 +362,54 @@ def test_reload_build_failure_keeps_old_config():
     with pytest.raises(RuntimeError):
         d.reload_config(Config())
     assert d.components.backend is old
+
+
+def test_reload_replaces_the_overlay():
+    new_overlay = Overlay()
+
+    def build(cfg):
+        return Components(cfg, Backend(), Injector(), lambda t: t)
+
+    d, *_ = make(build=build)
+    old_overlay = d.overlay
+    assert d.reload_config(Config(), overlay=new_overlay) == "ok reloaded"
+    assert d.overlay is new_overlay
+    assert old_overlay.closed  # the replaced overlay is torn down
+
+
+def test_the_new_overlay_waits_for_the_running_cycle():
+    new_overlay = Overlay()
+
+    def build(cfg):
+        return Components(cfg, Backend(), Injector(), lambda t: t)
+
+    d, *_ = make(backend=Backend(delay=0.2), build=build)
+    d.start()
+    speak()
+    d.stop()
+    assert d.reload_config(Config(), overlay=new_overlay) == "ok reload queued"
+    assert d.overlay is not new_overlay  # the session keeps the overlay it started with
+    d.wait_idle()
+    time.sleep(0.1)
+    assert d.overlay is new_overlay
+
+
+def test_a_second_reload_replaces_the_waiting_overlay():
+    first, second = Overlay(), Overlay()
+
+    def build(cfg):
+        return Components(cfg, Backend(), Injector(), lambda t: t)
+
+    d, *_ = make(backend=Backend(delay=0.2), build=build)
+    d.start()
+    speak()
+    d.stop()
+    assert d.reload_config(Config(), overlay=first) == "ok reload queued"
+    assert d.reload_config(Config(), overlay=second) == "ok reload queued"
+    assert first.closed  # the overlay that will never be used is not leaked
+    d.wait_idle()
+    time.sleep(0.1)
+    assert d.overlay is second
 
 
 def test_concurrent_toggles_never_corrupt_state():

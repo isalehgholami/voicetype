@@ -121,7 +121,7 @@ A file that exists but contains no usable declaration is not an error: the overl
 
 The watcher is only installed when `overlay.theme` points at an existing `.css` file — a palette name cannot change under your hands, so there is nothing to watch. When the file changes, the overlay re-reads it, re-applies the `overlay.accent` override and the `overlay.opacity` factor, pushes the new palette into the visualization and repaints. There is no need to restart the daemon.
 
-Changing `overlay.theme` *itself* — or any other `[overlay]` key — in `config.toml` still needs a daemon restart, because the overlay is not rebuilt by `voicetype reload`. See [known-issues.md](known-issues.md).
+Changing `overlay.theme` *itself* — or any other `[overlay]` key — in `config.toml` is picked up by `voicetype reload`: the overlay is rebuilt with the new settings and the old window is torn down. The overlay is only rebuilt when its own settings changed, so a reload that touches other keys leaves it alone.
 
 ## Accent override
 
