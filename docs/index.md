@@ -6,15 +6,18 @@ title: VoiceType
 
 Persian-first voice typing for Linux. Press a shortcut, speak, and the text appears at the cursor of any application.
 
-## Install (Arch Linux)
+## Install (any Linux distribution)
 
 ```bash
 git clone https://github.com/isalehgholami/voicetype.git && cd voicetype
-./scripts/setup-arch.sh
-./scripts/install-user.sh
-systemctl --user enable --now ydotool
+./scripts/install-user.sh --system-deps
 voicetype doctor
 ```
+
+The installer detects your distribution (pacman, apt, dnf, zypper, apk, xbps), installs the missing
+system packages, sets up a pipx environment, the systemd user unit, the config file and the shortcut.
+It also starts the daemon and waits until it answers, so `voicetype reload` works right afterwards.
+Without `--system-deps` it stays root-free and prints the commands you would have to run.
 
 ## Guides
 

@@ -42,12 +42,15 @@ if [ -z "$KWRITE" ]; then
 fi
 
 mkdir -p "$APPS" "$KGA"
-cat > "$APPS/$DESKTOP_NAME" <<EOF
+# write it atomically: a half-written desktop file would not be registered
+tmp="$APPS/.$DESKTOP_NAME.$$"
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp" <<EOF
 [Desktop Entry]
 Type=Application
 Name=VoiceType Toggle
 Comment=Start/stop voice dictation
-Exec=$TOGGLE
+Exec="$TOGGLE"
 Icon=audio-input-microphone
 Terminal=false
 Categories=Utility;
@@ -55,11 +58,18 @@ NoDisplay=false
 StartupNotify=false
 X-KDE-GlobalAccel-CommandShortcut=true
 EOF
+chmod 644 "$tmp"
+mv -f "$tmp" "$APPS/$DESKTOP_NAME"
+trap - EXIT
 # Fallback copy for the registry; KIO only launches it when the file is executable.
 cp "$APPS/$DESKTOP_NAME" "$KGA/$DESKTOP_NAME"
 chmod 755 "$KGA/$DESKTOP_NAME"
 
 "$KWRITE" --file kglobalshortcutsrc --group services --group "$DESKTOP_NAME" --key _launch "$COMBO"
+
+if [ ! -x "$TOGGLE" ] && [ "$TOGGLE" != "voicetype-toggle" ]; then
+    echo "warning: '$TOGGLE' does not exist — install VoiceType before using the shortcut" >&2
+fi
 
 kbuildsycoca6 >/dev/null 2>&1 || true
 

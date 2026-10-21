@@ -24,22 +24,28 @@
 - امن: سوکت کنترل با مجوز `0600`، متن هرگز اجرا نمی‌شود
 - `voicetype doctor` مشکلات محیط را با دستور نصب نشان می‌دهد
 
-> ⚠️ **نسخه‌ی ۰٫۱:** هسته با ۶۶۵ تست خودکار بررسی شده، اما بخش‌هایی که به دسکتاپ واقعی نیاز دارند (پنجره، میان‌بر، paste، میکروفون) باید روی سیستم خودتان تأیید شوند. اول `voicetype doctor` را اجرا کنید.
+> ⚠️ **نسخه‌ی ۰٫۱:** هسته با ۶۷۸ تست خودکار بررسی شده، اما بخش‌هایی که به دسکتاپ واقعی نیاز دارند (پنجره، میان‌بر، paste، میکروفون) باید روی سیستم خودتان تأیید شوند. اول `voicetype doctor` را اجرا کنید.
 
-## 🚀 نصب (Arch Linux + KDE Plasma)
+## 🚀 نصب (هر توزیع لینوکسی)
 
 ```bash
 git clone https://github.com/isalehgholami/voicetype.git
 cd voicetype
 chmod +x scripts/*.sh             # احتیاط: دانلود به‌صورت zip/tar ممکن است مجوز اجرا را حذف کند
 
-./scripts/setup-arch.sh            # نصب بسته‌ها + افزودن به گروه‌های input و audio
-#   ← یک بار خارج و دوباره وارد شوید
+./scripts/install-user.sh --system-deps   # بسته‌های سیستم + نصب با pipx + سرویس systemd + تنظیمات + میان‌بر Super+Alt+V
+#   ← یک بار خارج و دوباره وارد شوید تا گروه‌های input و audio اعمال شوند
 
-./scripts/install-user.sh          # نصب با pipx + سرویس systemd + تنظیمات + میان‌بر Super+Alt+V
-systemctl --user enable --now ydotool   # سرویس ydotoold باید اجرا باشد؛ اگر یونیت کاربری نبود: sudo ydotoold &
 voicetype doctor                   # همه‌ی موارد الزامی باید [✓] باشند
 ```
+
+اسکریپت **توزیع را تشخیص می‌دهد** (Arch، دبیان/اوبونتو، فدورا، openSUSE، آلپاین و Void): هرچه کم است را
+پیدا می‌کند و — با `--system-deps` — فقط همان را با `sudo` نصب می‌کند. بدون این گزینه اصلاً root لازم نیست
+و به‌جای نصب، دستور دقیق نصب را چاپ می‌کند.
+
+بعد از آن، اسکریپت VoiceType را در یک venv پیکس نصب می‌کند (بدون root و بدون خطای PEP 668)، یونیت
+systemd کاربری را می‌نویسد و اجرا می‌کند، `~/.config/voicetype/config.toml` را همراه با یک راهنمای کوتاه
+می‌سازد، میان‌بر KDE را ثبت می‌کند و در پایان همه‌چیز را بررسی می‌کند — هر مرحله گزارش خودش را چاپ می‌کند.
 
 > روی Arch دستور `pip install --user` به‌خاطر PEP 668 خطا می‌دهد، برای همین از **pipx** استفاده شده. بسته‌ی سیستمی می‌خواهید؟ `cd packaging && makepkg -si` (پکیج‌های `python-sounddevice` و `python-speechrecognition` در AUR هستند؛ با `yay`/`paru` نصب کنید).
 
@@ -53,17 +59,29 @@ git pull && ./scripts/install-user.sh     # به‌روزرسانی کد و وا
 
 کد نصب‌شده و وابستگی‌هایش را به‌روز می‌کند، اگر venv خراب باشد از نو می‌سازد، یونیت systemd را دوباره می‌نویسد، دیمون را ری‌استارت می‌کند و مطمئن می‌شود `~/.config/voicetype/config.toml` وجود دارد (فایل خراب با نام `config.toml.bak-<timestamp>` پشتیبان می‌شود و تنظیمات پیش‌فرض جایگزین آن می‌شود — تنظیمات شما پاک نمی‌شود).
 
-### افزونه‌های اختیاری
+### گزینه‌ها
 
 ```bash
 ./scripts/install-user.sh socks,vosk,whisper,hotkey,translate   # هرکدام را بخواهید: socks · vosk · whisper · hotkey · translate
+./scripts/install-user.sh --system-deps         # نصب بسته‌های سیستمیِ جاافتاده (sudo)
 ./scripts/install-user.sh --reinstall                 # ساخت دوباره‌ی venv پیکس
 ./scripts/install-user.sh --reset-extras socks        # نصب دقیقاً همین افزونه‌ها
-./scripts/install-user.sh --no-hotkey                 # دست‌نزدن به میان‌بر KDE
+./scripts/install-user.sh --no-hotkey                 # دست‌نزدن به میان‌بر
+./scripts/install-user.sh --no-service                # دست‌نزدن به یونیت systemd
+./scripts/install-user.sh --no-mic-check              # رد کردن تست میکروفون
+./scripts/install-user.sh --hotkey Ctrl+Alt+Space # میان‌بر دلخواه
+./scripts/install-user.sh -v                          # نمایش کامل خروجی دستورها
+./scripts/install-user.sh --help
 voicetype models install fa-small     # مدل فارسی Vosk (حدود ۵۳ مگابایت)
 ```
 
 افزونه‌های نصب‌شده در اجرای قبلی حفظ می‌شوند؛ پس اجرای دوباره‌ی اسکریپت هیچ قابلیتی را بی‌سروصدا حذف نمی‌کند.
+
+### دسکتاپ‌های دیگر
+
+ثبت میان‌بر به‌صورت خودکار فقط روی **KDE Plasma** انجام می‌شود. روی بقیه‌ی دسکتاپ‌ها اسکریپت دقیقاً
+می‌گوید چه چیزی را کجا bind کنید (Hyprland، Sway/i3، GNOME) — یا خودتان `voicetype-toggle` را bind کنید.
+اگر ترجیح می‌دهید دستی نصب کنید: `pip install -e .` و سپس `voicetype config init`.
 
 ## 🎮 استفاده
 
@@ -118,6 +136,7 @@ language = "en"               # "en" یا "English" یا "de" یا "zh-CN"
 
 ```bash
 ./scripts/install-user.sh translate        # نصب py-googletrans
+# (بسته‌ی googletrans همیشه نصب می‌شود — دیمون برای بررسیِ تنظیمات به آن نیاز دارد)
 ```
 
 ```toml
@@ -169,7 +188,7 @@ voicetype reload && voicetype net-test      # OK یا FAIL به‌همراه ع�
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ruff check .
-pytest        # ۶۶۵ تست؛ بدون میکروفون، شبکه یا GUI
+pytest        # ۶۷۸ تست؛ بدون میکروفون، شبکه یا GUI
 ```
 
 ## 📄 مجوز

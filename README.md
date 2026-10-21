@@ -9,7 +9,7 @@ browser, Telegram, terminal, IDE, LibreOffice.
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Arch%20Linux%20%C2%B7%20KDE%20Plasma%206-1793D1?logo=archlinux&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-665_passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-689_passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 [Features](#-features) · [How it works](#-how-it-works) · [Requirements](#-requirements) · [Quick start](#-quick-start) · [Usage](#-usage) · [Configuration](#%EF%B8%8F-configuration) · [Providers](#%EF%B8%8F-speech-providers) · [Development](#%EF%B8%8F-development) · [Troubleshooting](#-troubleshooting) · [Docs](#%EF%B8%8F-documentation) · [فارسی](README.fa.md)
@@ -29,7 +29,7 @@ browser, Telegram, terminal, IDE, LibreOffice.
 - **Smart stop** — adaptive silence detection that calibrates to your room noise, or stop it yourself.
 - **Hardened** — the control socket is `0600`, transcribed text is never executed, control characters are stripped.
 - **Self-diagnosing** — `voicetype doctor` tells you what's missing and how to install it.
-- **Well tested** — 665 automated tests; the core runs without a microphone, network or GUI.
+- **Well tested** — 689 automated tests; the core runs without a microphone, network or GUI.
 
 > **Status: v0.1.** The core is unit-tested, but the parts that need a real desktop (overlay, shortcut registration, paste injection, microphone) must be verified on your machine. Run `voicetype doctor` first and see [docs/inject-matrix.md](docs/inject-matrix.md).
 
@@ -63,20 +63,26 @@ browser, Telegram, terminal, IDE, LibreOffice.
 
 ## 🚀 Quick start
 
-### Arch Linux
+### Linux (any distribution)
 
 ```bash
 git clone https://github.com/isalehgholami/voicetype.git
 cd voicetype
 chmod +x scripts/*.sh             # safety net: zip/tar downloads can drop the exec bit
 
-./scripts/setup-arch.sh            # installs system packages, adds you to 'input' + 'audio'
-#   → log out and back in so the new groups apply
+./scripts/install-user.sh --system-deps   # system packages + pipx + service + config + Super+Alt+V
+#   → log out and back in so the new 'input'/'audio' groups apply
 
-./scripts/install-user.sh          # pipx install + systemd user service + config + Super+Alt+V shortcut
-systemctl --user enable --now ydotool   # needs the ydotoold daemon; no user unit? run: sudo ydotoold &
 voicetype doctor                   # every required line should be [✓]
 ```
+
+The installer is **distribution-aware**: it detects Arch, Debian/Ubuntu, Fedora, openSUSE, Alpine and Void,
+checks what is missing and — with `--system-deps` — installs only that, with `sudo`. Without `--system-deps`
+it stays root-free and prints the exact command for your package manager.
+
+It then installs VoiceType into a **pipx** venv (no root, no PEP 668 error), writes and starts the systemd
+*user* unit, creates `~/.config/voicetype/config.toml` with a short guide, registers the KDE shortcut and
+verifies the whole installation — every step prints what it did.
 
 > Arch blocks `pip install --user` (PEP 668), so the script uses **pipx**. Prefer a system package?
 > `cd packaging && makepkg -si` (`python-sounddevice` and `python-speechrecognition` come from the AUR — use `yay`/`paru`).
@@ -95,22 +101,29 @@ and replaced by the defaults — your settings are never lost).
 
 Now click into any text field, press **Super + Alt + V**, speak, and press it again (or just stay silent for 3 s).
 
-### Other distros
-
-Install the equivalents of the packages in [`scripts/setup-arch.sh`](scripts/setup-arch.sh), then `pip install -e .` and follow the same steps from `voicetype config init`.
-If your desktop isn't KDE, bind the command `voicetype-toggle` to a key in your compositor/DE settings instead of running `install-hotkey.sh`.
-
-### Optional extras
+### Options
 
 ```bash
 ./scripts/install-user.sh socks,vosk,whisper,hotkey,translate   # pick any: socks · vosk · whisper · hotkey · translate
-./scripts/install-user.sh --reinstall                 # rebuild the pipx venv from scratch
-./scripts/install-user.sh --reset-extras socks        # install exactly these extras (drop the others)
-./scripts/install-user.sh --no-hotkey                 # leave the KDE shortcut alone
-voicetype models install fa-small                     # download the Persian Vosk model (~53 MB)
+./scripts/install-user.sh --system-deps      # also install the missing system packages (sudo)
+./scripts/install-user.sh --reinstall        # rebuild the pipx venv from scratch
+./scripts/install-user.sh --reset-extras socks  # install exactly these extras (drop the others)
+./scripts/install-user.sh --no-hotkey        # leave the global shortcut alone
+./scripts/install-user.sh --no-service       # do not touch the systemd user unit
+./scripts/install-user.sh --no-mic-check     # skip the microphone test
+./scripts/install-user.sh --hotkey Ctrl+Alt+Space
+./scripts/install-user.sh -v                 # show the full output of every command
+./scripts/install-user.sh --help
+voicetype models install fa-small             # download the Persian Vosk model (~53 MB)
 ```
 
 Extras of a previous run are kept, so re-running the script never silently removes a feature you installed.
+
+### Other desktops
+
+The script registers the shortcut automatically on **KDE Plasma**. On every other desktop it prints the
+exact binding you need (Hyprland, Sway/i3, GNOME) — or bind `voicetype-toggle` yourself.
+If you prefer to install by hand: `pip install -e .` and then `voicetype config init`.
 
 ## 🎮 Usage
 
@@ -235,6 +248,7 @@ Speak Persian, get English — or any other language. The translation is **off b
 
 ```bash
 ./scripts/install-user.sh translate        # installs py-googletrans
+# (googletrans is always installed — the daemon needs it to validate the config)
 ```
 
 ```toml
@@ -281,7 +295,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 ruff check .          # lint
-pytest                # 665 tests, no microphone / network / GUI needed
+pytest                # 689 tests, no microphone / network / GUI needed
 ```
 
 - The core (config, dispatcher, STT, post-processing, injector logic) runs on any OS; GTK, evdev and PortAudio are imported lazily.
@@ -298,7 +312,7 @@ pytest                # 665 tests, no microphone / network / GUI needed
 ```
 voicetype/        daemon, dispatcher, audio, stt/, postprocess/, translate/, injector, overlay, control, cli …
 tests/            unit + integration tests (fixed WAV fixture, 50-sentence corpus)
-scripts/          setup-arch.sh, install-user.sh, install-hotkey.sh, bench.py, record_corpus.py, release.sh
+scripts/          install-user.sh (the installer), install-hotkey.sh, bench.py, record_corpus.py, release.sh
 packaging/        PKGBUILD, systemd user unit, .desktop files, AUR package
 spikes/           hardware experiments (injection matrix, OSD, hotkey, STT comparison)
 docs/             architecture, ADRs, privacy, compatibility, troubleshooting, benchmarks
