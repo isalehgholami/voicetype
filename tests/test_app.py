@@ -6,6 +6,7 @@ import zipfile
 
 import pytest
 
+import voicetype.daemon
 from voicetype import cli, doctor, models
 from voicetype.config import Config
 from voicetype.daemon import Daemon, _BrokenInjector, build_components
@@ -129,6 +130,31 @@ def test_reload_can_turn_the_overlay_off(overlay_daemon):
     assert d.handle_command("reload") == "ok reloaded"
     assert isinstance(d.overlay, NullOverlay)
     assert built[0].closed  # the window is gone
+
+
+def test_a_broken_config_keeps_the_overlay_and_allows_a_later_rebuild(overlay_daemon, monkeypatch):
+    d, built, path = overlay_daemon
+    path.write_text('[overlay]\nenabled = true\nwidth = 640\n[stt]\nfallback_provider = ""\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert d.overlay is built[0]
+    # a configuration that cannot be built is rejected: the working overlay
+    # stays, the overlay that was built for it is closed instead of leaked
+    real_build = voicetype.daemon.build_components
+
+    def broken_build(cfg):
+        raise RuntimeError("cannot build")
+
+    monkeypatch.setattr("voicetype.daemon.build_components", broken_build)
+    path.write_text('[overlay]\nenabled = true\nwidth = 800\n[stt]\nfallback_provider = ""\n', encoding="utf-8")
+    assert d.handle_command("reload").startswith("error")
+    assert d.overlay is built[0]
+    assert len(built) == 2 and built[1].closed
+    # the same overlay settings are applied once the configuration is fixed
+    monkeypatch.setattr("voicetype.daemon.build_components", real_build)
+    path.write_text('[overlay]\nenabled = true\nwidth = 800\n[stt]\nfallback_provider = ""\n', encoding="utf-8")
+    assert d.handle_command("reload") == "ok reloaded"
+    assert d.overlay is built[2] and built[2].cfg.width == 800
+    assert built[0].closed
 
 
 def test_reload_applies_the_new_log_level(overlay_daemon, monkeypatch):

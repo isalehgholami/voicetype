@@ -487,3 +487,6 @@ class Dispatcher:
             log.exception("backend close failed")
         close_quietly(self._c.translator)
         close_quietly(self.overlay)
+        with self._lock:
+            pending, self._pending_overlay = self._pending_overlay, None
+        close_quietly(pending)  # a reload that never got applied

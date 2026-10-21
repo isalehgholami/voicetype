@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import __version__, network
 from .audio import AudioCapture
-from .config import Config, ConfigManager
+from .config import Config, ConfigManager, OverlayConfig
 from .control import ControlServer
 from .dispatcher import Components, Dispatcher, NullOverlay, Overlay, close_quietly
 from .injector import InjectionError, TextInjector
@@ -153,13 +153,25 @@ class Daemon:
         that touches the STT settings must not tear the window down.  A new
         overlay that cannot be built (no GTK, no display) never replaces the
         one that works.
+
+        A configuration that is rejected keeps the old one: the overlay that
+        was built for it is closed instead of leaked.
         """
+        previous = self._overlay_cfg
         overlay = self._new_overlay(cfg)
         try:
-            return self.dispatcher.reload_config(cfg, overlay=overlay)
+            result = self.dispatcher.reload_config(cfg, overlay=overlay)
         except Exception:
-            close_quietly(overlay)  # the swap never happened: do not leak it
+            self._discard_overlay(overlay, previous)
             raise
+        if result.startswith("error"):
+            self._discard_overlay(overlay, previous)
+        return result
+
+    def _discard_overlay(self, overlay: Overlay | None, previous: OverlayConfig) -> None:
+        """Throw away an overlay that was never used; the old settings stay."""
+        close_quietly(overlay)
+        self._overlay_cfg = previous
 
     def _new_overlay(self, cfg: Config) -> Overlay | None:
         """An overlay for the new configuration; None when the current one still fits."""
