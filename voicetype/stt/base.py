@@ -19,6 +19,10 @@ class STTError(RuntimeError):
 
     user_message = "Speech recognition failed"
 
+    #: Whether the failure deserves a desktop notification.  Most errors do;
+    #: "nothing was said" does not — the overlay already says it.
+    notify = True
+
     def __init__(self, detail: str = "") -> None:
         super().__init__(detail or self.user_message)
         self.detail = detail
@@ -36,6 +40,9 @@ class STTUnintelligibleError(STTError):
     """Audio was processed but no words were recognised."""
 
     user_message = "Could not understand the audio"
+    # Staying silent is not a failure the user needs a notification for: the
+    # overlay already reports it and the daemon goes straight back to idle.
+    notify = False
 
 
 class STTUnavailableError(STTError):

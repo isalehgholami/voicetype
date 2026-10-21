@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from voicetype.config import OverlayConfig
+from voicetype.config import DEFAULT_FONT, OverlayConfig
 from voicetype.dispatcher import NullOverlay
 from voicetype.overlay import (
     MODE_TO_STATE,
@@ -21,6 +21,7 @@ from voicetype.overlay import (
     Anchors,
     GtkOverlay,
     create_overlay,
+    display_text,
     meter_audio,
     mode_sound,
     resolve_accent,
@@ -32,6 +33,7 @@ from voicetype.overlay import (
     synthesize_samples,
     theme_file,
     total_width,
+    transcript_words,
     word_positions,
 )
 from voicetype.ui.animations import FadeEnvelope, StateManager, VisualizerState
@@ -129,12 +131,41 @@ def test_every_mode_maps_to_a_known_visualizer_state():
 
 
 def test_status_text_uses_the_mode_labels_and_the_messages():
-    assert status_text_for("listening") == "Listening…"
-    assert status_text_for("processing") == "Processing…"
+    assert status_text_for("listening") == "listening"
+    assert status_text_for("processing") == "processing"
     assert status_text_for("error", "خطا رخ داد") == "خطا رخ داد"
     assert status_text_for("warning", "هشدار") == "هشدار"
     assert status_text_for("hidden") == ""
 
+
+def test_every_label_is_lower_case():
+    assert status_text_for("error", "Could not understand the audio") == "could not understand the audio"
+    assert status_text_for("warning", "Provider Fallback") == "provider fallback"
+    assert status_text_for("success", "Hello World") == "hello world"
+    assert display_text("Hello World") == "hello world"
+    assert display_text("") == ""
+
+
+def test_the_live_transcript_is_lower_case_too():
+    assert transcript_words(["Hello", "WORLD", "سلام"]) == ["hello", "world", "سلام"]
+
+
+def test_every_font_in_the_overlay_is_monospaced():
+    """One font for the whole OSD: the labels, the messages and the transcript."""
+    cfg = OverlayConfig()
+    assert cfg.font == DEFAULT_FONT
+    assert "monospace" in DEFAULT_FONT.lower()
+    # the live transcript shares the overlay's font
+    assert TranscriptConfig.from_overlay_config(cfg).font_family == DEFAULT_FONT
+    # the renderer lays every text out with that one family
+    source = inspect.getsource(GtkOverlay._layout)
+    assert "self._font_family" in source
+
+
+def test_the_font_is_configurable():
+    cfg = OverlayConfig(font="Fira Code")
+    assert cfg.font == "Fira Code"
+    assert TranscriptConfig.from_overlay_config(cfg).font_family == "Fira Code"
 
 # ---------------------------------------------------------------- theme / accent
 

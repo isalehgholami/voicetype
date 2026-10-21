@@ -15,6 +15,11 @@ from typing import Any, NamedTuple
 
 ENV_CONFIG = "VOICETYPE_CONFIG"
 
+#: The font stack the overlay draws its text with.  Everything the overlay
+#: shows — the status labels, the messages and the live transcript — is
+#: monospaced: the OSD reads like a terminal readout, not like prose.
+DEFAULT_FONT = "monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"
+
 
 class ConfigError(ValueError):
     """Raised for invalid configuration (message is user-facing)."""
@@ -94,7 +99,7 @@ class OverlayConfig:
     height: int = 96
     show_partial_text: bool = True
     show_audio_meter: bool = True
-    font: str = "Vazirmatn, Noto Sans Arabic, Sans"
+    font: str = DEFAULT_FONT
     style: str = "pill"  # pill | waveform | vu_meter
     animations: bool = True  # master switch for the animated transitions
     show_transcript: bool = True  # live word-by-word transcript above the pill
@@ -420,7 +425,7 @@ width = 360
 height = 96
 show_partial_text = true
 show_audio_meter = true
-font = "Vazirmatn, Noto Sans Arabic, Sans"
+font = "monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"
 style = "pill"             # pill | waveform | vu_meter
 animations = true          # master switch for the animated transitions
 show_transcript = true     # live word-by-word transcript above the pill

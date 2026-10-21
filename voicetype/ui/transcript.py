@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from ..config import DEFAULT_FONT
 from .easing import clamp, ease_in_out, ease_out_cubic, progress
 
 __all__ = [
@@ -42,7 +43,7 @@ class TranscriptConfig:
     enter_seconds: float = 0.20
     exit_seconds: float = 0.20
     stagger_seconds: float = 0.028
-    font_family: str = "sans-serif"
+    font_family: str = DEFAULT_FONT
     font_size: float = 17.0
     offset_y: float = 7.0
     rise_px: float = 9.0
@@ -54,7 +55,7 @@ class TranscriptConfig:
         return cls(
             enabled=bool(getattr(cfg, "show_transcript", True)),
             word_limit=int(clamp(int(getattr(cfg, "transcript_words", 4)), 1, 12)),
-            font_family=str(getattr(cfg, "font", "") or "sans-serif"),
+            font_family=str(getattr(cfg, "font", "") or DEFAULT_FONT),
         )
 
 

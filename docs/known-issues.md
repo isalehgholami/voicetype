@@ -2,7 +2,7 @@
 
 1. **`wtype` on KDE Plasma** — KWin does not implement `zwp_virtual_keyboard_v1`; use the default paste backend.
 2. **`google_free` is an undocumented endpoint** — may rate-limit or change; fallback to Vosk happens after 3 consecutive failures.
-3. **In-flight Google requests can't be aborted** — cancelling during "Processing…" returns immediately, the network call finishes in the background and its result is discarded.
+3. **In-flight Google requests can't be aborted** — cancelling during "processing" returns immediately, the network call finishes in the background and its result is discarded.
 4. **Hold-to-talk needs group `input`** and `pip install evdev`; the default press-to-toggle does not.
 5. **Overlay/hotkey settings need a daemon restart**; STT/injector/post-processing settings apply on `voicetype reload`. The one exception is the theme *file*: `overlay.theme` pointing at a `.css` file is watched, so editing it repaints the overlay right away.
 6. **Persian ZWNJ rules are heuristic** (`می `/`نمی ` prefixes, `ها`/`تر` suffixes). Add exceptions via `[postprocess.custom_replacements]`.

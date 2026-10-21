@@ -171,6 +171,7 @@ animations = true               # master switch for motion: false = instant, no 
 show_audio_meter = true         # false = the visualization ignores the microphone
 show_transcript = true          # live word-by-word transcript above the overlay
 transcript_words = 4            # how many words stay on screen (1–12)
+font = "monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"  # every text in the overlay
 fade_ms = 140                   # length of the show/hide transition
 sounds = false                  # audible cue when recording starts, stops or fails
 

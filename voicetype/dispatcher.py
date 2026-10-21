@@ -171,7 +171,12 @@ class Dispatcher:
             except (AudioError, STTError) as e:
                 self._audio = None
                 self._abort_stream()
-                self._show_error(session, getattr(e, "user_message", None) or str(e), str(e))
+                self._show_error(
+                    session,
+                    getattr(e, "user_message", None) or str(e),
+                    str(e),
+                    notify=getattr(e, "notify", True),
+                )
                 return f"error {e}"
             self.overlay.show_listening()
             if cfg.audio.pause_media and self._media is not None:
@@ -354,7 +359,12 @@ class Dispatcher:
             log.info("transcription cancelled")
         except STTError as e:
             if session == self._session:
-                self._show_error(session, e.user_message, e.detail or repr(e))
+                self._show_error(
+                    session,
+                    e.user_message,
+                    e.detail or repr(e),
+                    notify=getattr(e, "notify", True),
+                )
             return
         except Exception as e:  # noqa: BLE001 - injector / unexpected: never wedge the daemon
             log.exception("session failed")
@@ -379,7 +389,12 @@ class Dispatcher:
         return self._c.backend.transcribe(pcm, cancel)
 
     # ------------------------------------------------------------------ errors / helpers
-    def _show_error(self, session: int, message: str, detail: str) -> None:
+    def _show_error(self, session: int, message: str, detail: str, *, notify: bool = True) -> None:
+        """Report a failure in the overlay and — unless it is quiet — on the desktop.
+
+        ``notify=False`` keeps the message in the overlay only: "nothing was
+        said" is not worth a desktop notification.
+        """
         log.warning("error: %s", detail)
         with self._lock:
             if session != self._session:
@@ -387,7 +402,7 @@ class Dispatcher:
             self._set_state(State.IDLE, f"error: {detail}")
             self._release_media()
             self.overlay.show_error(message)
-            if self._notifier is not None and self._c.config.notify_errors:
+            if notify and self._notifier is not None and self._c.config.notify_errors:
                 self._notifier.error(message)
             self._apply_pending_locked()
 

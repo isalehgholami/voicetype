@@ -74,7 +74,7 @@ SOUND_DOWN = "down"
 SOUND_ERROR = "error"
 
 #: The status labels shown when there is no live transcript to draw.
-STATUS_TEXT: dict[str, str] = {"listening": "Listening…", "processing": "Processing…"}
+STATUS_TEXT: dict[str, str] = {"listening": "listening", "processing": "processing"}
 
 #: ``overlay.position`` → the vertical layer-shell edge the surface is anchored to.
 POSITION_TO_EDGE: dict[str, str] = {
@@ -174,10 +174,23 @@ def resolve_accent(palette: Palette, accent: str) -> tuple:
 
 
 def status_text_for(mode: str, message: str = "") -> str:
-    """The label shown for ``mode`` when there is no live transcript."""
+    """The label shown for ``mode`` when there is no live transcript.
+
+    Every label is lower case: the overlay speaks in one voice.
+    """
     if mode in ("error", "warning", "success"):
-        return message or ""
+        return display_text(message)
     return STATUS_TEXT.get(mode, "")
+
+
+def display_text(text: str) -> str:
+    """The overlay's text style: everything the user reads is lower case."""
+    return str(text or "").lower()
+
+
+def transcript_words(words: Sequence[str]) -> list[str]:
+    """The live transcript's words as they are drawn (lower case)."""
+    return [display_text(word) for word in words]
 
 
 def mode_sound(previous: str, mode: str) -> str | None:
@@ -891,7 +904,12 @@ class GtkOverlay:
         return True
 
     def _layout(self, cr, text: str, size: float):
-        """A Pango layout for ``text`` at ``size`` points."""
+        """A Pango layout for ``text`` at ``size`` points.
+
+        The whole overlay is drawn with one font — the monospaced
+        ``overlay.font`` — so the labels, the messages and the live transcript
+        all share the same face.
+        """
         layout = self._PangoCairo.create_layout(cr)
         layout.set_font_description(self._Pango.FontDescription(f"{self._font_family} {size}"))
         layout.set_text(text, -1)
@@ -913,7 +931,7 @@ class GtkOverlay:
     def _layout_words(self, cr, words: Sequence[str], size: float) -> list[tuple[object, float]]:
         """Lay every word out and measure it: ``[(layout, width), …]``."""
         out = []
-        for word in words:
+        for word in transcript_words(words):
             layout = self._layout(cr, word, size)
             out.append((layout, self._layout_width(layout)))
         return out

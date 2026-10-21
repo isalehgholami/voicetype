@@ -95,6 +95,7 @@ animations = true             # کلید اصلی حرکت: false یعنی بی�
 show_audio_meter = true       # false یعنی تصویرسازی میکروفون را نادیده می‌گیرد
 show_transcript = true        # پیش‌نمایش زنده‌ی متن کلمه‌به‌کلمه
 transcript_words = 4          # چند کلمه روی صفحه بماند (۱ تا ۱۲)
+font = "monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"  # قلمِ همه‌ی متن‌های OSD (تک‌عرض)
 fade_ms = 140                 # مدت انیمیشن ظاهر/محو شدن
 sounds = false                # بوق صوتی هنگام شروع، پایان یا خطای ضبط
 

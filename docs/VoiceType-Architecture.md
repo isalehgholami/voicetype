@@ -69,7 +69,7 @@ The remainder of this document walks through the target environment, surveys and
 The application must satisfy the following use cases end-to-end. Each is described from the user's perspective so that subsequent sections can be validated against it.
 
 - **G1 — Global hotkey activation.** The user can press a configurable key combination (default: `Super+Alt+V`) from anywhere on the desktop — regardless of which window is focused — and the application transitions from idle to "listening" within 500 ms.
-- **G2 — Microphone overlay.** While listening, a small floating overlay appears (default: top-center of the screen, 360×96 px) showing a real-time audio level meter and a status label ("Listening…"). The overlay is always-on-top, click-through, and respects Plasma 6's layer-shell protocol so it does not steal focus.
+- **G2 — Microphone overlay.** While listening, a small floating overlay appears (default: top-center of the screen, 360×96 px) showing a real-time audio level meter and a status label ("listening"). The overlay is always-on-top, click-through, and respects Plasma 6's layer-shell protocol so it does not steal focus.
 - **G3 — Persian-primary STT with English term handling.** The default recognition language is Persian (`fa-IR`) but the engine must correctly transcribe common English technical terms (e.g. "Linux", "Python", "Qt", "Wayland") embedded in Persian speech — exactly how GBoard does it.
 - **G4 — Cursor-position text injection.** The transcribed text is typed at the currently focused cursor position using a virtual keyboard protocol — `wtype` on Wayland, `xdotool` on X11 — so the text appears wherever the user was typing, with no clipboard pollution and no window-switching side effects.
 - **G5 — Stop conditions.** Listening stops when (a) the user presses the hotkey again (toggle mode), (b) the user presses `Escape`, or (c) the engine detects `N` consecutive seconds of silence (configurable, default 3 s). On stop, the overlay disappears within 300 ms.
@@ -219,7 +219,7 @@ OpenAI's Whisper is a transformer-based ASR model with state-of-the-art multilin
 - Big install: PyTorch + transformers = ~5 GB of pip packages.
 - GPU strongly recommended for `medium`+ models.
 
-**Verdict for VoiceType:** Supported as `provider = "whisper"`. Use case: "I'm offline, my machine has a GPU, and I want the best Persian accuracy." Default model: `whisper-1` (small) on CPU, `medium` on GPU. The non-streaming nature means the UX is slightly different — the overlay shows "Processing…" during inference rather than incremental text.
+**Verdict for VoiceType:** Supported as `provider = "whisper"`. Use case: "I'm offline, my machine has a GPU, and I want the best Persian accuracy." Default model: `whisper-1` (small) on CPU, `medium` on GPU. The non-streaming nature means the UX is slightly different — the overlay shows "processing" during inference rather than incremental text.
 
 ### 4.5 Comparison Table
 
@@ -411,7 +411,7 @@ sequenceDiagram
 
     U->>HK: Press Super+Alt+V
     HK->>D: toggle()
-    D->>O: show("Listening…")
+    D->>O: show("listening")
     O->>OS: layer-shell surface map
     D->>AC: start()
     AC->>OS: open mic via PipeWire
@@ -459,7 +459,7 @@ stateDiagram-v2
 
 - **IDLE** — no audio capture, overlay hidden, audio thread parked.
 - **LISTENING** — mic open, overlay visible with waveform, STT receiving chunks.
-- **TRANSCRIBING** — mic closed (silence detected or user toggled), waiting for STT final result. Overlay shows "Processing…".
+- **TRANSCRIBING** — mic closed (silence detected or user toggled), waiting for STT final result. Overlay shows "processing".
 - **INJECTING** — STT returned text, `wtype`/`xdotool` running. Overlay hidden immediately, then text appears at cursor.
 
 ### 6.5 Why these specific components?
@@ -880,7 +880,7 @@ class OverlayWidget(QWidget):
         attach_to_layer(self, layer=Layer.Overlay, anchor=Anchor.Top | Anchor.HorizontalCenter)
 
         self._level = 0.0
-        self._status = "Listening…"
+        self._status = "listening"
 
     def set_audio_level(self, level: float):
         self._level = max(0.0, min(1.0, level))
@@ -1268,7 +1268,7 @@ After changing the combo, run `systemctl --user reload voicetype.service` AND re
 | `[overlay] opacity` | `0.86` | `0.0`–`1.0` | Scales the opacity of the card the visualization is drawn on: the factor multiplies the alpha of the palette's background colour (the waveform and VU-meter panel) and the pill's own body. 0.0 = invisible, 1.0 = the palette's own opacity. |
 | `[overlay] width` | `360` | `120`–`1920` (px) | Overlay width. |
 | `[overlay] height` | `96` | `48`–`480` (px) | Overlay height. |
-| `[overlay] font` | `"Vazirmatn, Noto Sans Arabic, Sans"` | Any family list Pango understands | Font family for the status label and the live transcript. |
+| `[overlay] font` | `"monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"` | Any family list Pango understands | The font family of every text the overlay draws: the status labels, the messages and the live transcript. It is monospaced by default — the OSD reads like a terminal readout. |
 | `[overlay] show_partial_text` | `true` | `true` / `false` | If true, the live partial transcription is fed to the overlay and shown above the pill (streaming providers only). Needs `show_transcript` on as well. |
 | `[overlay] show_audio_meter` | `true` | `true` / `false` | If true, the visualization reacts to the microphone (the bars follow the level). If false, the level is treated as silence and the bars stay flat. |
 | `[overlay] style` | `"pill"` | `pill` / `waveform` / `vu_meter` | Which visualization the overlay draws. |

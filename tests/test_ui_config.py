@@ -18,6 +18,7 @@ import pytest
 
 from tests.test_dispatcher import Backend, FakeAudio, Injector, Overlay, speak
 from voicetype.config import (
+    DEFAULT_FONT,
     LEGACY_THEME_NAMES,
     SAMPLE_CONFIG,
     THEME_NAMES,
@@ -56,7 +57,12 @@ def test_existing_overlay_defaults_are_unchanged():
     assert cfg.opacity == 0.86
     assert (cfg.width, cfg.height) == (360, 96)
     assert cfg.show_partial_text is True and cfg.show_audio_meter is True
-    assert cfg.font == "Vazirmatn, Noto Sans Arabic, Sans"
+
+
+def test_the_overlay_font_is_monospaced():
+    cfg = OverlayConfig()
+    assert cfg.font == DEFAULT_FONT
+    assert "monospace" in cfg.font.lower()
 
 
 # ------------------------------------------------------------------ accepted values
@@ -81,6 +87,8 @@ def test_existing_overlay_defaults_are_unchanged():
         ("fade_ms", 0),
         ("fade_ms", 1000),
         ("sounds", True),
+        ("font", "Fira Code"),
+        ("font", ""),
     ],
 )
 def test_new_overlay_keys_are_accepted(key, value):

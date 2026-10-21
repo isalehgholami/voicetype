@@ -189,6 +189,30 @@ def test_errors_are_notified_unless_disabled():
     assert n2.msgs == []
 
 
+def test_silence_is_shown_in_the_overlay_but_never_notified():
+    """Nothing was said: the overlay says so, the desktop stays quiet."""
+    from voicetype.stt.base import STTUnintelligibleError
+
+    n = Notif()
+    d, ov = make(backend=Backend(exc=STTUnintelligibleError()), notifier=n)
+    d.start()
+    speak()
+    d.stop()
+    d.wait_idle()
+    assert any(e[0] == "show_error" and "understand" in e[1] for e in ov.events)
+    assert n.msgs == []
+
+
+def test_a_silent_recording_is_not_notified():
+    n = Notif()
+    d, ov = make(notifier=n)
+    d.start()
+    d.stop()  # the microphone recorded nothing at all
+    d.wait_idle()
+    assert any(e[0] == "show_error" for e in ov.events)
+    assert n.msgs == []
+
+
 # ------------------------------------------------------------------ logging (T-1.1.3 / T-2.9)
 def test_every_state_transition_is_logged(caplog):
     d, _ = make()
