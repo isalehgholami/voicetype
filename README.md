@@ -100,7 +100,7 @@ The script runs these steps and reports the result of each one:
 7. **Configuration.** Writes `~/.config/voicetype/config.toml` with a short guide at the top. An existing valid file is kept as it is; an invalid one is backed up as `config.toml.bak-<timestamp>` and replaced with the defaults.
 8. **Service unit.** Writes `~/.config/systemd/user/voicetype.service`, points it at the installed binary, and enables it for the next login.
 9. **Daemon.** Starts the daemon and waits until it answers on its control socket.
-10. **Shortcut.** Registers `Meta+Alt+V` as a global shortcut on KDE Plasma. On other desktops it prints the binding you need to add yourself.
+10. **Shortcut.** Registers `Meta+Alt+V` as a global shortcut in the place the running desktop expects it: `kglobalshortcutsrc` on KDE Plasma, a custom keybinding on GNOME, a bind line on Hyprland, a `bindsym` line on Sway and i3. On a desktop it does not know, it prints the line to add yourself.
 11. **Verification.** Prints a summary of what is working and what still needs attention.
 
 Log out and back in after the first run so that the `input` and `audio` group memberships take effect.
@@ -118,6 +118,8 @@ Log out and back in after the first run so that the `input` and `audio` group me
 | `--no-service` | Do not touch the systemd user unit. |
 | `--no-mic-check` | Skip the microphone test. |
 | `--hotkey <combo>` | Register a different shortcut, for example `--hotkey Ctrl+Alt+Space`. The `HOTKEY` environment variable has the same effect. |
+| `--desktop <name>` | Register the shortcut for a specific desktop: `auto` (the default), `kde`, `gnome`, `hyprland`, `sway`, or `i3`. |
+| `--hotkey-only` | Only register the global shortcut — nothing is installed or updated. |
 | `-v`, `--verbose` | Show the full output of every command the script runs. |
 | `-q`, `--quiet` | Report problems only. |
 | `--help` | Print the usage summary. |
@@ -154,7 +156,7 @@ voicetype config init # write ~/.config/voicetype/config.toml
 voicetype run                           # run the daemon in the foreground
 ```
 
-Then bind `voicetype-toggle` to your preferred shortcut. On KDE Plasma, use *System Settings → Keyboard → Shortcuts → Custom Shortcuts*, with the command `voicetype-toggle`. On other desktops, bind `voicetype-toggle` in the compositor or desktop configuration.
+Then bind `voicetype-toggle` to your preferred shortcut. The installer does this for you on KDE Plasma, GNOME, Hyprland, Sway and i3; with a manual installation, use *System Settings → Keyboard → Shortcuts → Custom Shortcuts* on KDE Plasma, and bind `voicetype-toggle` in the compositor or desktop configuration everywhere else.
 
 `pipx` is a convenient alternative to a hand-made virtual environment:
 
@@ -267,7 +269,7 @@ If the file becomes invalid, `voicetype config init --repair` copies it to `conf
 | Every key | `voicetype reload` |
 | `[overlay] theme` pointing at a `.css` file | immediately; the file is watched and the overlay repaints on change |
 
-The desktop shortcut is registered by the installer, not by the daemon, so changing the key combination means re-running `scripts/install-hotkey.sh`.
+The desktop shortcut is registered by the installer, not by the daemon, so changing the key combination means re-running `scripts/install-user.sh --hotkey-only --hotkey <combo>`.
 
 ### General
 
@@ -324,10 +326,10 @@ The provider-specific sub-tables `[stt.vosk]`, `[stt.whisper]`, and `[stt.google
 | Key | Default | Description |
 |---|---|---|
 | `enabled` | `true` | Whether the overlay is shown at all. The daemon works without it. |
-| `position` | `"top"` | Vertical position: `top`, `center`, or `bottom`. |
+| `position` | `"bottom"` | Vertical position: `top`, `center`, or `bottom`. |
 | `anchor_horizontal` | `"center"` | Horizontal anchor: `left`, `center`, or `right`. |
 | `offset_x` | `0` | Horizontal offset in pixels. Range −1920 to 1920. |
-| `offset_y` | `12` | Vertical offset in pixels. Range −1080 to 1080. |
+| `offset_y` | `50` | Vertical offset in pixels. Range −1080 to 1080. |
 | `theme` | `"dark"` | A palette name (`tokyo-night`, `nord`, `dracula`, `catppuccin-mocha`, `rose-pine`, `gruvbox-dark`, `tokyo-night-light`), the legacy values `dark` or `light`, or the path to a `.css` file. See [theming](docs/theming.md). |
 | `accent` | `""` | Hex colour that overrides the accent of the palette, for example `"#ff8800"`. Empty means the palette decides. |
 | `opacity` | `0.86` | Opacity of the card the overlay draws on. Range 0.0 to 1.0. |
@@ -339,7 +341,8 @@ The provider-specific sub-tables `[stt.vosk]`, `[stt.whisper]`, and `[stt.google
 | `show_transcript` | `true` | Whether the live word-by-word preview is shown above the overlay. |
 | `show_partial_text` | `true` | Whether partial results are rendered at all. Both this and `show_transcript` must be enabled for the preview. |
 | `transcript_words` | `4` | How many words the live preview keeps. Range 1 to 12. |
-| `font` | `"monospace, DejaVu Sans Mono, ..."` | The font stack used for every text the overlay draws. |
+| `font` | `""` | The font family every text of the overlay is drawn with. Empty — the default — means the system font, the family the desktop settings ask for. A value such as `"JetBrains Mono"` picks a face instead. |
+| `font_size` | `0.0` | The point size of the main text, the live transcript. Zero — the default — means the system's own font size, multiplied by 1.6 so the OSD is readable at a glance; a value sets the size in points. The status labels are drawn at 70 % of it. |
 | `fade_ms` | `140` | Duration of the show and hide transition in milliseconds. Range 0 to 1000. |
 | `sounds` | `false` | Play an audible cue when recording starts, stops, or fails. |
 
@@ -403,7 +406,7 @@ log_level = "INFO"
 notify_errors = true       # desktop notification on errors (notify-send)
 
 [hotkey]
-combo = "super+alt+v"      # used by install-hotkey.sh and the optional evdev listener
+combo = "super+alt+v"      # used by install-user.sh and the optional evdev listener
 toggle_mode = "press"      # press | hold (hold needs the evdev listener + group 'input')
 escape_stops = true
 extra_stops = ["esc"]
@@ -438,17 +441,18 @@ pause_media = false        # pause playing media (playerctl) while recording
 
 [overlay]
 enabled = true
-position = "top"
+position = "bottom"
 anchor_horizontal = "center"
 offset_x = 0
-offset_y = 12
+offset_y = 50
 theme = "dark"             # palette name (tokyo-night, nord, …), legacy dark/light, or a .css path
 opacity = 0.86
 width = 360
 height = 96
 show_partial_text = true
 show_audio_meter = true
-font = "monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"
+font = ""                   # empty = the system's own font; e.g. "JetBrains Mono"
+font_size = 0.0             # 0 = the system's own size; otherwise in points
 style = "pill"             # pill | waveform | vu_meter
 animations = true          # master switch for the animated transitions
 show_transcript = true     # live word-by-word transcript above the pill
@@ -577,7 +581,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 ruff check . # lint
-pytest                # 734 tests; no microphone, network, or GUI required
+pytest                # 756 tests; no microphone, network, or GUI required
 ```
 
 The core (configuration, dispatcher, speech backends, post-processing, injector logic) runs on any operating system. GTK, `evdev`, and PortAudio are imported lazily, so the test suite needs none of them.
@@ -599,7 +603,7 @@ registry.register("mine", lambda opts: MyBackend(opts))   # then: provider = "mi
 ```
 voicetype/        daemon, dispatcher, audio, stt/, postprocess/, translate/, injector, overlay, control, cli
 tests/            unit and integration tests (fixed WAV fixture, 50-sentence corpus)
-scripts/          install-user.sh (the installer), install-hotkey.sh, bench.py, record_corpus.py, release.sh
+scripts/          install-user.sh (the installer, it also registers the shortcut), bench.py, record_corpus.py, release.sh
 packaging/        PKGBUILD, systemd user unit, desktop files, AUR package
 spikes/           hardware experiments (injection matrix, OSD, hotkey, STT comparison)
 docs/             architecture, ADRs, privacy, compatibility, troubleshooting, benchmarks
@@ -612,7 +616,7 @@ Start with `voicetype doctor`. Every failing check comes with the command that f
 | Symptom | Fix |
 |---|---|
 | `daemon is not running` | `systemctl --user start voicetype`; the log is in `journalctl --user -u voicetype -f` |
-| The shortcut does nothing | Check whether `voicetype toggle` works in a terminal. On Plasma, log out and back in once after the first installation, then re-run `scripts/install-hotkey.sh` if needed. |
+| The shortcut does nothing | Check whether `voicetype toggle` works in a terminal. On Plasma, log out and back in once after the first installation, then re-run `scripts/install-user.sh --hotkey-only` if needed. |
 | The text is not typed | `systemctl --user enable --now ydotool`; check the *text injection backend* line in `doctor`. |
 | The wrong paste in terminals | Install `kdotool`, or set `[injector] paste_shortcut = "ctrl+shift+v"`. |
 | No overlay | Install `gtk4-layer-shell` and `python-gobject`. GNOME does not implement layer-shell, so the daemon runs without an overlay there. |

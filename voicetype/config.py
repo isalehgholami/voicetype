@@ -15,10 +15,17 @@ from typing import Any, NamedTuple
 
 ENV_CONFIG = "VOICETYPE_CONFIG"
 
-#: The font stack the overlay draws its text with.  Everything the overlay
-#: shows — the status labels, the messages and the live transcript — is
-#: monospaced: the OSD reads like a terminal readout, not like prose.
-DEFAULT_FONT = "monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"
+#: The font the overlay draws its text with.  The default is empty: the
+#: overlay then follows the system's own font — the family the desktop
+#: settings ask for, and their size multiplied, so the OSD is readable at a
+#: glance.  A value ("JetBrains Mono", "monospace, DejaVu Sans Mono", …)
+#: picks a face instead.
+DEFAULT_FONT = ""
+
+#: The point size of the overlay's main text — the live transcript.  The
+#: default is zero: the overlay then follows the system's own font size.  A
+#: value picks the size in points.
+DEFAULT_FONT_SIZE = 0.0
 
 
 class ConfigError(ValueError):
@@ -31,6 +38,27 @@ def default_config_path() -> Path:
         return Path(env).expanduser()
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(base) / "voicetype" / "config.toml"
+
+
+def resolve_font_family(value: str | None) -> str:
+    """The font family the user configured.
+
+    An empty value means "the system's own font": the caller resolves it
+    from the desktop settings.
+    """
+    return str(value or "").strip()
+
+
+def resolve_font_size(value: float | int | None) -> float:
+    """The point size the user configured.
+
+    Zero means "the system's own font size"; the caller resolves it from
+    the desktop settings.
+    """
+    try:
+        return max(0.0, float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_FONT_SIZE
 
 
 # ---------------------------------------------------------------- dataclasses
@@ -89,10 +117,10 @@ class AudioConfig:
 @dataclass(frozen=True)
 class OverlayConfig:
     enabled: bool = True
-    position: str = "top"  # top | center | bottom
+    position: str = "bottom"  # top | center | bottom
     anchor_horizontal: str = "center"  # left | center | right
     offset_x: int = 0
-    offset_y: int = 12
+    offset_y: int = 50
     theme: str = "dark"
     opacity: float = 0.86
     width: int = 360
@@ -100,6 +128,7 @@ class OverlayConfig:
     show_partial_text: bool = True
     show_audio_meter: bool = True
     font: str = DEFAULT_FONT
+    font_size: float = DEFAULT_FONT_SIZE  # point size of the overlay's main text
     style: str = "pill"  # pill | waveform | vu_meter
     animations: bool = True  # master switch for the animated transitions
     show_transcript: bool = True  # live word-by-word transcript above the pill
@@ -219,6 +248,7 @@ _RANGES: dict[str, tuple[float, float]] = {
     "overlay.height": (48, 480),
     "overlay.fade_ms": (0, 1000),
     "overlay.transcript_words": (1, 12),
+    "overlay.font_size": (0.0, 72.0),
     "injector.typing_delay_ms": (0, 50),
     "translate.timeout_seconds": (1.0, 120.0),
 }
@@ -406,7 +436,7 @@ log_level = "INFO"
 notify_errors = true       # desktop notification on errors (notify-send)
 
 [hotkey]
-combo = "super+alt+v"      # used by install-hotkey.sh and the optional evdev listener
+combo = "super+alt+v"      # used by install-user.sh and the optional evdev listener
 toggle_mode = "press"      # press | hold (hold needs the evdev listener + group 'input')
 escape_stops = true
 extra_stops = ["esc"]
@@ -441,17 +471,18 @@ pause_media = false        # pause playing media (playerctl) while recording
 
 [overlay]
 enabled = true
-position = "top"
+position = "bottom"
 anchor_horizontal = "center"
 offset_x = 0
-offset_y = 12
+offset_y = 50
 theme = "dark"             # palette name (tokyo-night, nord, …), legacy dark/light, or a .css path
 opacity = 0.86
 width = 360
 height = 96
 show_partial_text = true
 show_audio_meter = true
-font = "monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"
+font = ""                   # empty = the system's own font; e.g. "JetBrains Mono"
+font_size = 0.0             # 0 = the system's own size; otherwise in points
 style = "pill"             # pill | waveform | vu_meter
 animations = true          # master switch for the animated transitions
 show_transcript = true     # live word-by-word transcript above the pill

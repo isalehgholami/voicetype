@@ -136,6 +136,23 @@ def run_checks(
             except Exception as e:  # noqa: BLE001
                 out.append(Check("compositor supports layer-shell", False, str(e), required=False))
 
+        # the font the overlay would draw with
+        try:
+            from .config import OverlayConfig
+            from .overlay import resolve_overlay_font
+
+            family, size = resolve_overlay_font(cfg.overlay if cfg is not None else OverlayConfig())
+            out.append(
+                Check(
+                    "overlay font",
+                    True,
+                    f"{family or 'system default'} {size:g}pt",
+                    required=False,
+                )
+            )
+        except Exception as e:  # noqa: BLE001 - a nicety
+            out.append(Check("overlay font", False, str(e), required=False))
+
     # offline engines
     out.append(Check("vosk installed (offline STT)", has_module("vosk"), "pip install vosk", required=False))
     models = installed()

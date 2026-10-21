@@ -13,20 +13,25 @@ from pathlib import Path
 
 import pytest
 
-from voicetype.config import DEFAULT_FONT, OverlayConfig
+from voicetype.config import DEFAULT_FONT, DEFAULT_FONT_SIZE, OverlayConfig
 from voicetype.dispatcher import NullOverlay
 from voicetype.overlay import (
     MODE_TO_STATE,
+    STATUS_FONT_SCALE,
+    SYSTEM_FONT_SCALE,
     TRANSPARENCY_CSS,
     Anchors,
     GtkOverlay,
     create_overlay,
     display_text,
+    fitting_size,
     meter_audio,
     mode_sound,
+    preview_height,
     resolve_accent,
     resolve_anchors,
     resolve_settings,
+    scaled_font_size,
     smooth,
     status_text_for,
     style_palette,
@@ -150,22 +155,76 @@ def test_the_live_transcript_is_lower_case_too():
     assert transcript_words(["Hello", "WORLD", "سلام"]) == ["hello", "world", "سلام"]
 
 
-def test_every_font_in_the_overlay_is_monospaced():
+def test_one_font_for_the_whole_osd():
     """One font for the whole OSD: the labels, the messages and the transcript."""
     cfg = OverlayConfig()
-    assert cfg.font == DEFAULT_FONT
-    assert "monospace" in DEFAULT_FONT.lower()
     # the live transcript shares the overlay's font
-    assert TranscriptConfig.from_overlay_config(cfg).font_family == DEFAULT_FONT
+    assert TranscriptConfig.from_overlay_config(cfg).font_family == cfg.font
     # the renderer lays every text out with that one family
     source = inspect.getsource(GtkOverlay._layout)
-    assert "self._font_family" in source
+    assert "self._font_description" in source
+
+
+def test_the_font_follows_the_system_by_default():
+    """With nothing configured the overlay uses the desktop's own font."""
+    cfg = OverlayConfig()
+    assert cfg.font == DEFAULT_FONT == ""
+    assert cfg.font_size == DEFAULT_FONT_SIZE == 0.0
 
 
 def test_the_font_is_configurable():
-    cfg = OverlayConfig(font="Fira Code")
+    cfg = OverlayConfig(font="Fira Code", font_size=20.0)
     assert cfg.font == "Fira Code"
-    assert TranscriptConfig.from_overlay_config(cfg).font_family == "Fira Code"
+    assert cfg.font_size == 20.0
+    transcript = TranscriptConfig.from_overlay_config(cfg)
+    assert transcript.font_family == "Fira Code"
+    assert transcript.font_size == 20.0
+
+
+def test_the_status_label_keeps_its_share_of_the_main_text():
+    assert STATUS_FONT_SCALE < 1.0
+    settings = resolve_settings(OverlayConfig(font_size=20.0))
+    assert settings.font_size == 20.0
+
+
+def test_the_configured_font_reaches_the_settings():
+    settings = resolve_settings(OverlayConfig(font="Fira Code", font_size=20.0))
+    assert settings.font_family == "Fira Code"
+    assert settings.font_size == 20.0
+
+
+def test_an_unset_font_is_left_to_the_system():
+    settings = resolve_settings(OverlayConfig())
+    assert settings.font_family == ""
+    assert settings.font_size == 0.0
+
+
+def test_a_big_font_needs_a_taller_surface():
+    metrics = (1.4, 0.4)
+    assert preview_height(42.0, 7.0, 40.0, metrics) > preview_height(42.0, 7.0, 17.0, metrics)
+
+
+def test_a_font_that_does_not_fit_is_shrunk():
+    # a 20pt font with an ascent of 1.4 px per point needs 28 px above the
+    # baseline
+    assert fitting_size(20.0, 1.4, 40.0) == 20.0
+    assert fitting_size(20.0, 1.4, 10.0) == pytest.approx(10.0 / 1.4)
+
+
+def test_a_font_that_does_not_fit_the_surface_at_all_is_kept():
+    # nothing sensible can be drawn in no space, so the size is left alone
+    assert fitting_size(20.0, 1.4, 0.0) == 20.0
+
+
+def test_the_system_size_is_scaled_up():
+    """The OSD is read at a glance, so the system size is multiplied."""
+    assert scaled_font_size(0.0, 10.0) == pytest.approx(10.0 * SYSTEM_FONT_SCALE)
+    assert scaled_font_size(0.0, 10.0) > 10.0
+
+
+def test_a_configured_size_wins_over_the_system_size():
+    assert scaled_font_size(18.0, 10.0) == 18.0
+
 
 # ---------------------------------------------------------------- theme / accent
 

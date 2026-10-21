@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from ..config import DEFAULT_FONT
+from ..config import DEFAULT_FONT, DEFAULT_FONT_SIZE, resolve_font_family, resolve_font_size
 from ..text import LTR, base_direction
 from .easing import clamp, ease_in_out, ease_out_cubic, progress
 
@@ -40,12 +40,15 @@ class TranscriptConfig:
     word_limit: int = 4
     idle_timeout_seconds: float = 1.40
 
+    #: The font the user configured: the family (``overlay.font``) and the
+    #: point size of the main text (``overlay.font_size``).
+    font_family: str = DEFAULT_FONT
+    font_size: float = DEFAULT_FONT_SIZE
+
     # Visual tuning is part of the overlay style, not user configuration.
     enter_seconds: float = 0.20
     exit_seconds: float = 0.20
     stagger_seconds: float = 0.028
-    font_family: str = DEFAULT_FONT
-    font_size: float = 17.0
     offset_y: float = 7.0
     rise_px: float = 9.0
     max_width: float = 320.0
@@ -56,7 +59,8 @@ class TranscriptConfig:
         return cls(
             enabled=bool(getattr(cfg, "show_transcript", True)),
             word_limit=int(clamp(int(getattr(cfg, "transcript_words", 4)), 1, 12)),
-            font_family=str(getattr(cfg, "font", "") or DEFAULT_FONT),
+            font_family=resolve_font_family(getattr(cfg, "font", "")),
+            font_size=resolve_font_size(getattr(cfg, "font_size", DEFAULT_FONT_SIZE)),
         )
 
 

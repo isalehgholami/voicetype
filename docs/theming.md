@@ -123,6 +123,30 @@ The watcher is only installed when `overlay.theme` points at an existing `.css` 
 
 Changing `overlay.theme` *itself* — or any other `[overlay]` key — in `config.toml` is picked up by `voicetype reload`: the overlay is rebuilt with the new settings and the old window is torn down. The overlay is only rebuilt when its own settings changed, so a reload that touches other keys leaves it alone.
 
+## Fonts
+
+The overlay draws every text — the status labels, the error and success messages and the live transcript — with **one** font. By default that is the **system's own font**: the family the desktop settings ask for, and their size multiplied by 1.6, because the OSD is read at a glance and a system size of nine or eleven points is too small for it.
+
+```toml
+[overlay]
+font = ""          # empty = the system's own font
+font_size = 0.0    # 0 = the system's own size, multiplied
+```
+
+Both keys are independent: you can pick a family and keep the system's size, or set a size and keep the system's family.
+
+```toml
+[overlay]
+font = "JetBrains Mono"   # a family, or a comma-separated list of fallbacks
+font_size = 16.0          # in points
+```
+
+A family list is handed to Pango as it is, so `"monospace, DejaVu Sans Mono, Liberation Mono"` picks the first face that is installed. A family that is not installed falls back to the system's font.
+
+The size is the point size of the **main text** — the live transcript. The status labels are drawn at 70 % of it, so the two keep their hierarchy whatever the size is. A font that does not fit above the pill is shrunk until it does, and the overlay window grows with a large font instead of clipping the words.
+
+Font changes are applied by `voicetype reload`, like every other `[overlay]` key.
+
 ## Accent override
 
 To change one colour without writing a theme file, use `overlay.accent`:

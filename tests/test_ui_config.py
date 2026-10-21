@@ -19,6 +19,7 @@ import pytest
 from tests.test_dispatcher import Backend, FakeAudio, Injector, Overlay, speak
 from voicetype.config import (
     DEFAULT_FONT,
+    DEFAULT_FONT_SIZE,
     LEGACY_THEME_NAMES,
     SAMPLE_CONFIG,
     THEME_NAMES,
@@ -50,19 +51,20 @@ def test_existing_overlay_defaults_are_unchanged():
     """The new keys must not have moved any of the old ones."""
     cfg = OverlayConfig()
     assert cfg.enabled is True
-    assert cfg.position == "top"
+    assert cfg.position == "bottom"
     assert cfg.anchor_horizontal == "center"
-    assert (cfg.offset_x, cfg.offset_y) == (0, 12)
+    assert (cfg.offset_x, cfg.offset_y) == (0, 50)
     assert cfg.theme == "dark"
     assert cfg.opacity == 0.86
     assert (cfg.width, cfg.height) == (360, 96)
     assert cfg.show_partial_text is True and cfg.show_audio_meter is True
 
 
-def test_the_overlay_font_is_monospaced():
+def test_the_overlay_font_follows_the_system_by_default():
+    """With nothing configured the overlay uses the desktop's own font."""
     cfg = OverlayConfig()
-    assert cfg.font == DEFAULT_FONT
-    assert "monospace" in cfg.font.lower()
+    assert cfg.font == DEFAULT_FONT == ""
+    assert cfg.font_size == DEFAULT_FONT_SIZE == 0.0
 
 
 # ------------------------------------------------------------------ accepted values
@@ -89,6 +91,9 @@ def test_the_overlay_font_is_monospaced():
         ("sounds", True),
         ("font", "Fira Code"),
         ("font", ""),
+        ("font_size", 0),
+        ("font_size", 12),
+        ("font_size", 72),
     ],
 )
 def test_new_overlay_keys_are_accepted(key, value):
@@ -114,6 +119,13 @@ def test_transcript_words_out_of_range_is_rejected(value):
     with pytest.raises(ConfigError) as ei:
         parse_config({"overlay": {"transcript_words": value}})
     assert "overlay.transcript_words" in str(ei.value)
+
+
+@pytest.mark.parametrize("value", [-1, 73])
+def test_font_size_out_of_range_is_rejected(value):
+    with pytest.raises(ConfigError) as ei:
+        parse_config({"overlay": {"font_size": value}})
+    assert "overlay.font_size" in str(ei.value)
 
 
 @pytest.mark.parametrize("value", ["nope", "#gggggg", "#12345", "7aa2f7"])

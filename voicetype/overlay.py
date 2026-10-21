@@ -22,9 +22,9 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from .config import OverlayConfig
+from .config import DEFAULT_FONT_SIZE, OverlayConfig, resolve_font_family, resolve_font_size
 from .dispatcher import NullOverlay, Overlay
 from .log import get_logger
 from .text import LTR, RTL, word_directions
@@ -55,8 +55,22 @@ LEVEL_BUFFER_SIZE = 64
 #: The number of buckets in the synthesised pseudo-waveform.
 WAVEFORM_BUCKETS = 32
 
-#: The point size of the status label.
-STATUS_FONT_SIZE = 12.0
+#: The status label is drawn at this share of the main text: the transcript
+#: carries the words, the label only the state.
+STATUS_FONT_SCALE = 0.7
+
+#: The overlay's text is bigger than the system's own font: the OSD is read
+#: at a glance, and a system size of nine or eleven points is too small for
+#: it.  A configured ``overlay.font_size`` wins over this.
+SYSTEM_FONT_SCALE = 1.6
+
+#: The font size used when the desktop names no size of its own.
+FALLBACK_FONT_SIZE = 11.0
+
+#: The ascent and the descent of a typical face, per point of font size.  They
+#: are only used when the real font cannot be measured.
+FALLBACK_ASCENT = 1.2
+FALLBACK_DESCENT = 0.4
 
 #: Maps an overlay mode onto the visualizer state it drives.
 MODE_TO_STATE: dict[str, str] = {
@@ -320,6 +334,82 @@ def total_width(entries: Sequence[tuple[object, float]], space: float) -> float:
     return sum(width for _, width in entries) + space * max(0, len(entries) - 1)
 
 
+def preview_height(
+    pill_height: float,
+    offset_y: float,
+    size: float,
+    metrics: tuple[float, float],
+) -> float:
+    """The surface height a text of ``size`` points needs above the pill.
+
+    The live transcript is painted above the pill, so a large font needs a
+    taller surface: the words would otherwise be clipped by the top edge.
+    """
+    ascent, descent = metrics
+    return pill_height + 4.0 + offset_y + (ascent + descent) * size
+
+
+def fitting_size(size: float, ascent: float, baseline: float) -> float:
+    """The biggest size whose ascent still fits above ``baseline``.
+
+    The text is drawn just above the pill, so a font that is too tall for
+    the space above it would be clipped by the surface.
+    """
+    if ascent <= 0.0 or baseline <= 0.0:
+        return size
+    return min(size, baseline / ascent)
+
+
+def scaled_font_size(size: float, system_size: float) -> float:
+    """The point size the main text is drawn with.
+
+    A configured size wins.  Without one the system's own size is scaled up:
+    the OSD is read at a glance, and a system size of nine or eleven points
+    is too small for it.
+    """
+    return size if size > 0.0 else system_size * SYSTEM_FONT_SCALE
+
+
+def system_font() -> tuple[str, float]:
+    """The desktop's own font: the family and the size, in points.
+
+    The family and the size come from the desktop settings, so the overlay
+    looks like the rest of the system.  Without a display they cannot be
+    read: the family stays empty (Pango's default) and the size falls back.
+    """
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Pango", "1.0")
+        from gi.repository import Gtk, Pango
+
+        settings = Gtk.Settings.get_default()
+        name = settings.get_property("gtk-font-name") if settings is not None else ""
+        description = Pango.FontDescription(str(name or ""))
+        family = str(description.get_family() or "")
+        size = float(description.get_size()) / float(Pango.SCALE)
+        return (family, size if size > 0.0 else FALLBACK_FONT_SIZE)
+    except Exception:  # noqa: BLE001 - the desktop font is a nicety
+        log.debug("the system font could not be read", exc_info=True)
+        return ("", FALLBACK_FONT_SIZE)
+
+
+def resolve_overlay_font(cfg: OverlayConfig) -> tuple[str, float]:
+    """The font family and the point size the overlay draws with.
+
+    This is what ``voicetype doctor`` reports: the configured family and
+    size, or the system's own font.
+    """
+    settings = resolve_settings(cfg)
+    family, size = settings.font_family, settings.font_size
+    if not family or size <= 0.0:
+        system_family, system_size = system_font()
+        family = family or system_family
+        size = scaled_font_size(size, system_size)
+    return (family, size)
+
+
 def install_transparency_css(Gtk, Gdk) -> None:
     """Make the overlay window's surface transparent (once per process).
 
@@ -418,6 +508,12 @@ class OverlaySettings:
     sounds: bool
     #: The show/hide fade duration in milliseconds (0 = instant).
     fade_ms: int
+    #: The font family the user configured (``overlay.font``); empty means
+    #: "the system's own font".
+    font_family: str
+    #: The point size of the main text the user configured
+    #: (``overlay.font_size``); zero means "the system's own font size".
+    font_size: float
     #: The live transcript's settings.
     transcript: TranscriptConfig
 
@@ -439,6 +535,7 @@ def resolve_settings(cfg: OverlayConfig) -> OverlaySettings:
             stagger_seconds=0.0,
         )
     fade_ms = 0 if not animated else int(getattr(cfg, "fade_ms", 140))
+    font_size = resolve_font_size(getattr(cfg, "font_size", DEFAULT_FONT_SIZE))
     return OverlaySettings(
         theme=str(getattr(cfg, "theme", "dark") or "dark"),
         accent=str(getattr(cfg, "accent", "") or ""),
@@ -447,6 +544,8 @@ def resolve_settings(cfg: OverlayConfig) -> OverlaySettings:
         audio_meter=bool(getattr(cfg, "show_audio_meter", True)),
         sounds=bool(getattr(cfg, "sounds", False)),
         fade_ms=fade_ms,
+        font_family=resolve_font_family(getattr(cfg, "font", "")),
+        font_size=font_size,
         transcript=transcript,
     )
 
@@ -514,9 +613,9 @@ class GtkOverlay:
         self._lock = threading.Lock()
         self._error: Exception | None = None
 
-        self._GLib = None
-        self._Pango = None
-        self._PangoCairo = None
+        self._GLib: Any = None
+        self._Pango: Any = None
+        self._PangoCairo: Any = None
         self._win = None
         self._area = None
         self._loop = None
@@ -531,9 +630,14 @@ class GtkOverlay:
         self._levels: deque[float] = deque(maxlen=LEVEL_BUFFER_SIZE)
         self._samples: list[float] = []
 
-        self._font_family = str(getattr(cfg, "font", "") or "sans-serif")
-
         self._settings = resolve_settings(cfg)
+        # The font is resolved once the desktop settings are known; until
+        # then these are the values the user configured.
+        self._font_family = self._settings.font_family
+        self._font_size = self._settings.font_size
+        self._status_font_size = 0.0
+        #: The ascent and the descent of the font, per point; measured once.
+        self._metrics: tuple[float, float] | None = None
         # The theme is kept as a live object, not just a resolved palette, so
         # an edited theme file can be picked up without a daemon restart.
         self._theme_name = self._settings.theme
@@ -597,6 +701,70 @@ class GtkOverlay:
         except Exception:  # noqa: BLE001 - the watcher is a nicety
             log.debug("theme watcher unavailable", exc_info=True)
 
+    # ------------------------------------------------------------------ font
+    def _resolve_font(self) -> None:
+        """Resolve the font every text of the overlay is drawn with.
+
+        With nothing configured the overlay follows the desktop's own font:
+        the family the settings ask for, and their size multiplied — the
+        OSD is read at a glance, and a system size of nine or eleven points
+        is too small for it.  A configured family or size wins, and the
+        status label keeps its share of the main text either way.
+        """
+        system_family, system_size = system_font()
+        self._font_family = self._settings.font_family or system_family
+        self._font_size = scaled_font_size(self._settings.font_size, system_size)
+        self._status_font_size = self._font_size * STATUS_FONT_SCALE
+        # The live transcript draws with the very same font.
+        self._animator.config = replace(
+            self._animator.config,
+            font_family=self._font_family,
+            font_size=self._font_size,
+        )
+
+    def _font_description(self, size: float):
+        """The Pango font description of the configured font.
+
+        A part that is not known is left out of the description, so Pango
+        falls back to the system's own font for it.
+        """
+        parts = []
+        if self._font_family:
+            parts.append(self._font_family)
+        if size > 0.0:
+            parts.append(f"{size:g}")
+        return self._Pango.FontDescription(" ".join(parts))
+
+    def _font_metrics(self) -> tuple[float, float]:
+        """The ascent and the descent of the font, per point of font size.
+
+        They decide how much room the text takes above the pill, so they are
+        measured from the font itself instead of being guessed.  The result
+        is cached: the font does not change while the overlay is alive.
+        """
+        if self._metrics is not None:
+            return self._metrics
+        try:
+            import cairo
+
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
+            layout = self._PangoCairo.create_layout(cairo.Context(surface))
+            layout.set_font_description(self._font_description(self._font_size))
+            layout.set_text("Ag", -1)
+            line = layout.get_line_readonly(0)
+            if line is not None and self._font_size > 0.0:
+                _, logical = line.get_extents()
+                scale = float(self._Pango.SCALE)
+                ascent = max(0.0, -logical.y / scale) / self._font_size
+                descent = max(0.0, (logical.height + logical.y) / scale) / self._font_size
+                if ascent > 0.0:
+                    self._metrics = (ascent, descent)
+                    return self._metrics
+        except Exception:  # noqa: BLE001 - the metrics are a nicety
+            log.debug("the font metrics could not be measured", exc_info=True)
+        self._metrics = (FALLBACK_ASCENT, FALLBACK_DESCENT)
+        return self._metrics
+
     # ------------------------------------------------------------------ GTK thread
     def _run(self) -> None:
         import gi
@@ -625,6 +793,10 @@ class GtkOverlay:
                 raise RuntimeError("compositor does not support wlr-layer-shell")
 
             install_transparency_css(Gtk, Gdk)
+
+            # The font is resolved before anything is measured: the surface
+            # grows with it and every text is laid out with it.
+            self._resolve_font()
 
             viz = _create_visualization(str(getattr(self.cfg, "style", "pill")), self.palette)
             # the accent override (and any future palette change) reaches the
@@ -691,7 +863,8 @@ class GtkOverlay:
 
         The live transcript is painted above the pill, so a surface that is
         too short for the pill's preview threshold is grown — otherwise the
-        text would land on top of the pill (hyprwhspr does the same).
+        text would land on top of the pill (hyprwhspr does the same).  A
+        large font grows the surface as well: the words need the room.
         """
         width = int(self.cfg.width)
         height = int(self.cfg.height)
@@ -699,7 +872,16 @@ class GtkOverlay:
             threshold = int(getattr(viz, "PREVIEW_HEIGHT_THRESHOLD", 0) or 0)
             if threshold:
                 height = max(height, threshold + 1)
+            height = max(height, int(math.ceil(self._preview_height(viz))))
         return width, height
+
+    def _preview_height(self, viz) -> float:
+        """The surface height the configured font needs above the pill."""
+        pill_h = float(getattr(viz, "PILL_HEIGHT", 0) or 0)
+        if pill_h <= 0.0:
+            return 0.0
+        offset = float(self._animator.config.offset_y)
+        return preview_height(pill_h, offset, self._font_size, self._font_metrics())
 
     def _make_click_through(self) -> None:
         try:
@@ -883,11 +1065,12 @@ class GtkOverlay:
         available = max(0.0, float(width) - 20.0)
         if available <= 0.0:
             return
-        layout = self._layout(cr, text, STATUS_FONT_SIZE)
+        baseline = self._text_baseline(width, height)
+        size = fitting_size(self._status_font_size, self._font_metrics()[0], baseline)
+        layout = self._layout(cr, text, size)
         layout.set_width(int(available * self._Pango.SCALE))
         layout.set_ellipsize(self._Pango.EllipsizeMode.END)
         layout.set_alignment(self._Pango.Alignment.CENTER)
-        baseline = self._text_baseline(width, height)
         x = (float(width) - available) / 2.0
         y = baseline + self._baseline_offset(layout)
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.55)
@@ -917,6 +1100,12 @@ class GtkOverlay:
         previous_directions = word_directions(frame.previous_words, base)
         current_directions = word_directions(frame.current_words, base)
 
+        # The words sit just above the pill: a font that does not fit the
+        # space above it is shrunk, so a large ``overlay.font_size`` never
+        # clips the text.
+        baseline = self._text_baseline(width, height)
+        size = fitting_size(size, self._font_metrics()[0], baseline)
+
         space = self._measure(cr, " ", size)
         previous = self._layout_words(cr, frame.previous_words, size)
         current = self._layout_words(cr, frame.current_words, size)
@@ -933,7 +1122,6 @@ class GtkOverlay:
         current_positions = word_positions(
             [w for _, w in current], space, width, current_directions, base
         )
-        baseline = self._text_baseline(width, height)
 
         for word in frame.words:
             if word.alpha <= 0.01:
@@ -968,12 +1156,12 @@ class GtkOverlay:
     def _layout(self, cr, text: str, size: float):
         """A Pango layout for ``text`` at ``size`` points.
 
-        The whole overlay is drawn with one font — the monospaced
+        The whole overlay is drawn with one font — the configured
         ``overlay.font`` — so the labels, the messages and the live transcript
         all share the same face.
         """
         layout = self._PangoCairo.create_layout(cr)
-        layout.set_font_description(self._Pango.FontDescription(f"{self._font_family} {size}"))
+        layout.set_font_description(self._font_description(size))
         layout.set_text(text, -1)
         return layout
 

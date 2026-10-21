@@ -45,7 +45,7 @@ voicetype doctor                   # همه‌ی موارد الزامی بای�
 
 بعد از آن، اسکریپت VoiceType را در یک venv پیکس نصب می‌کند (بدون root و بدون خطای PEP 668)، یونیت
 systemd کاربری را می‌نویسد و اجرا می‌کند، `~/.config/voicetype/config.toml` را همراه با یک راهنمای کوتاه
-می‌سازد، میان‌بر KDE را ثبت می‌کند و در پایان همه‌چیز را بررسی می‌کند — هر مرحله گزارش خودش را چاپ می‌کند.
+می‌سازد، میان‌برِ دسکتاپِ در حال اجرا را ثبت می‌کند و در پایان همه‌چیز را بررسی می‌کند — هر مرحله گزارش خودش را چاپ می‌کند.
 
 > روی Arch دستور `pip install --user` به‌خاطر PEP 668 خطا می‌دهد، برای همین از **pipx** استفاده شده. بسته‌ی سیستمی می‌خواهید؟ `cd packaging && makepkg -si` (پکیج‌های `python-sounddevice` و `python-speechrecognition` در AUR هستند؛ با `yay`/`paru` نصب کنید).
 
@@ -70,6 +70,8 @@ git pull && ./scripts/install-user.sh     # به‌روزرسانی کد و وا
 ./scripts/install-user.sh --no-service                # دست‌نزدن به یونیت systemd
 ./scripts/install-user.sh --no-mic-check              # رد کردن تست میکروفون
 ./scripts/install-user.sh --hotkey Ctrl+Alt+Space # میان‌بر دلخواه
+./scripts/install-user.sh --hotkey-only          # فقط ثبت میان‌بر، بدون نصب
+./scripts/install-user.sh --desktop hyprland     # ثبت میان‌بر برای یک دسکتاپِ مشخص
 ./scripts/install-user.sh -v                          # نمایش کامل خروجی دستورها
 ./scripts/install-user.sh --help
 voicetype models install fa-small     # مدل فارسی Vosk (حدود ۵۳ مگابایت)
@@ -79,8 +81,9 @@ voicetype models install fa-small     # مدل فارسی Vosk (حدود ۵۳ م
 
 ### دسکتاپ‌های دیگر
 
-ثبت میان‌بر به‌صورت خودکار فقط روی **KDE Plasma** انجام می‌شود. روی بقیه‌ی دسکتاپ‌ها اسکریپت دقیقاً
-می‌گوید چه چیزی را کجا bind کنید (Hyprland، Sway/i3، GNOME) — یا خودتان `voicetype-toggle` را bind کنید.
+ثبت خودکار میان‌بر روی **KDE Plasma**، **GNOME**، **Hyprland**، **Sway** و **i3** انجام می‌شود: به‌ترتیب در
+`kglobalshortcutsrc`، به‌صورت custom keybinding، با یک خط `bind` و با یک خط `bindsym` نوشته می‌شود.
+روی دسکتاپی که اسکریپت نشناسد، دقیقاً می‌گوید چه خطی را کجا bind کنید — یا خودتان `voicetype-toggle` را bind کنید.
 اگر ترجیح می‌دهید دستی نصب کنید: `pip install -e .` و سپس `voicetype config init`.
 
 ## 🎮 استفاده
@@ -105,7 +108,7 @@ provider = "google_free"      # google_free | vosk | whisper | google_cloud
 silence_threshold_seconds = 3.0
 
 [overlay]
-position = "top"              # top | center | bottom
+position = "bottom"           # top | center | bottom
 style = "pill"                # pill | waveform | vu_meter
 theme = "tokyo-night"         # نام پالت، "dark"/"light" یا مسیر یک فایل .css
 accent = ""                   # مثلاً "#ff8800" — جایگزینی رنگ accent پالت
@@ -114,7 +117,8 @@ animations = true             # کلید اصلی حرکت: false یعنی بی�
 show_audio_meter = true       # false یعنی تصویرسازی میکروفون را نادیده می‌گیرد
 show_transcript = true        # پیش‌نمایش زنده‌ی متن کلمه‌به‌کلمه
 transcript_words = 4          # چند کلمه روی صفحه بماند (۱ تا ۱۲)
-font = "monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"  # قلمِ همه‌ی متن‌های OSD (تک‌عرض)
+font = ""                          # خالی = قلمِ خودِ سیستم؛ مثلاً "JetBrains Mono"
+font_size = 0.0                    # صفر = اندازه‌ی خودِ سیستم (ضرب در ۱٫۶)؛ در غیر این صورت بر حسب پوینت
 fade_ms = 140                 # مدت انیمیشن ظاهر/محو شدن
 sounds = false                # بوق صوتی هنگام شروع، پایان یا خطای ضبط
 

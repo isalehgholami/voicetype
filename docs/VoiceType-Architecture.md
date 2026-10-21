@@ -645,11 +645,11 @@ This section gives runnable Python snippets for every critical path in VoiceType
 
 ### 8.1 Global Hotkey via KDE Custom Shortcut (zero-dependency path)
 
-The simplest way to bind Super+Alt+V on KDE Plasma 6 is to register the shortcut via `kglobalaccel` from a `~/.config/kglobalshortcutsrc` entry, or — even simpler — to use the KDE System Settings GUI. VoiceType's install script automates the equivalent CLI path:
+The simplest way to bind Super+Alt+V on KDE Plasma 6 is to register the shortcut via `kglobalaccel` from a `~/.config/kglobalshortcutsrc` entry, or — even simpler — to use the KDE System Settings GUI. VoiceType's installer automates the equivalent CLI path in its shortcut step (`scripts/install-user.sh`, `--hotkey-only` re-runs just that step):
 
 ```bash
 #!/usr/bin/env bash
-# scripts/install-hotkey.sh
+# the KDE part of the shortcut step of scripts/install-user.sh
 # Registers Super+Alt+V as a global shortcut that runs `voicetype-toggle` on KDE Plasma 6.
 
 set -euo pipefail
@@ -676,6 +676,8 @@ qdbus org.kde.kglobalaccel /kglobalaccel reconfigure || true
 
 echo "Done. Press Super+Alt+V to test."
 ```
+
+The same step writes the binding for the other desktops: a custom keybinding of the media-keys plugin on GNOME (`gsettings`), a `bind = SUPER_ALT, V, exec, voicetype-toggle` line in `~/.config/hypr/voicetype.conf` on Hyprland, and a `bindsym` line in the config of the compositor on Sway and i3.
 
 The `voicetype-toggle` script in the user's PATH just sends a `SIGUSR1` to the running VoiceType process:
 
@@ -995,8 +997,8 @@ device = "cpu"                    # cpu | cuda
 keyfile = ""                      # path to service-account JSON
 
 [overlay]
-position = "top"                  # top | center | bottom
-offset_y = 12                     # pixels from anchor
+position = "bottom"               # top | center | bottom
+offset_y = 50                     # pixels from anchor
 theme = "dark"                    # palette name (tokyo-night, nord, …), light | dark, or a .css path
 opacity = 0.86                    # 0.0–1.0
 style = "pill"                    # pill | waveform | vu_meter
@@ -1240,7 +1242,7 @@ combo = "super+v"
 toggle_mode = "press"
 ```
 
-After changing the combo, run `systemctl --user reload voicetype.service` AND re-run the install-hotkey.sh script (§8.1) so `kglobalaccel` picks up the new binding. The script is idempotent — running it twice just updates the existing entry.
+After changing the combo, run `systemctl --user reload voicetype.service` AND re-run `scripts/install-user.sh --hotkey-only` (§8.1) so the desktop picks up the new binding. The step is idempotent — running it twice just updates the existing entry.
 
 ### 10.2 STT Provider Customization
 
@@ -1258,17 +1260,18 @@ After changing the combo, run `systemctl --user reload voicetype.service` AND re
 
 | TOML path | Default | Valid values | Notes |
 |---|---|---|---|
-| `[overlay] position` | `"top"` | `top` / `center` / `bottom` | Vertical anchor for the layer-shell surface. |
+| `[overlay] position` | `"bottom"` | `top` / `center` / `bottom` | Vertical anchor for the layer-shell surface. |
 | `[overlay] anchor_horizontal` | `"center"` | `left` / `center` / `right` | Horizontal anchor. |
 | `[overlay] offset_x` | `0` | `-1920`–`1920` (px) | Fine-tune horizontal position relative to anchor. |
-| `[overlay] offset_y` | `12` | `-1080`–`1080` (px) | Fine-tune vertical position. |
+| `[overlay] offset_y` | `50` | `-1080`–`1080` (px) | Fine-tune vertical position. |
 | `[overlay] enabled` | `true` | `true` / `false` | Whether the overlay window is opened at all. With it off the daemon runs without one. |
 | `[overlay] theme` | `"dark"` | `tokyo-night` / `tokyo-night-light` / `catppuccin-mocha` / `rose-pine` / `nord` / `gruvbox-dark` / `dracula`, the legacy `light` / `dark`, or a path to a `.css` file | Palette for background, text and accent colours. A CSS file uses GTK's `@define-color` syntax (`background-color`, `border-color`, `text-color`, `accent-color`, …). When the value is a `.css` file it is watched, so editing the file repaints the overlay without a daemon restart. The default `pill` style paints fixed colours, so the palette is only visible in the `waveform` and `vu_meter` styles ([docs/theming.md](theming.md)). |
 | `[overlay] accent` | `""` | `""` or a hex colour (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) | Overrides the palette's accent colour. Empty = use the palette accent. The accent slot is carried in the palette but not painted on its own yet. |
 | `[overlay] opacity` | `0.86` | `0.0`–`1.0` | Scales the opacity of the card the visualization is drawn on: the factor multiplies the alpha of the palette's background colour (the waveform and VU-meter panel) and the pill's own body. 0.0 = invisible, 1.0 = the palette's own opacity. |
 | `[overlay] width` | `360` | `120`–`1920` (px) | Overlay width. |
 | `[overlay] height` | `96` | `48`–`480` (px) | Overlay height. |
-| `[overlay] font` | `"monospace, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono"` | Any family list Pango understands | The font family of every text the overlay draws: the status labels, the messages and the live transcript. It is monospaced by default — the OSD reads like a terminal readout. |
+| `[overlay] font` | `""` | Any family list Pango understands | The font family of every text the overlay draws: the status labels, the messages and the live transcript. Empty = the system's own font, so the OSD looks like the rest of the desktop. |
+| `[overlay] font_size` | `0.0` | `0.0`–`72.0` (pt) | The point size of the main text, the live transcript. Zero = the system's own font size, multiplied by 1.6 so the OSD is readable at a glance. The status labels are drawn at 70 % of it, and a font that does not fit above the pill is shrunk until it does. |
 | `[overlay] show_partial_text` | `true` | `true` / `false` | If true, the live partial transcription is fed to the overlay and shown above the pill (streaming providers only). Needs `show_transcript` on as well. |
 | `[overlay] show_audio_meter` | `true` | `true` / `false` | If true, the visualization reacts to the microphone (the bars follow the level). If false, the level is treated as silence and the bars stay flat. |
 | `[overlay] style` | `"pill"` | `pill` / `waveform` / `vu_meter` | Which visualization the overlay draws. |
