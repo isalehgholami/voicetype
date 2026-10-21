@@ -59,6 +59,7 @@ def test_sample_config_is_valid(tmp_path):
         ('[stt]\nprovider = "google_cloud"\n', "keyfile"),
         ('[stt]\nfallback_provider = "zzz"\n', "fallback_provider"),
         ("[postprocess.custom_replacements]\na = 1\n", "custom_replacements"),
+        ('[audio]\nbackend = "jack"\n', "audio.backend"),
         ("this is = not toml [", "not valid TOML"),
     ],
 )

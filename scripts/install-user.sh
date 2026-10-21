@@ -886,6 +886,7 @@ pm_install_one() {
 # (pipewire-audio, pipewire-bin, pipewire-utils, pipewire-tools)
 REQUIREMENTS='audio daemon|pkg:pipewire|pipewire|pipewire|pipewire|pipewire|pipewire|pipewire
 audio tools|pw-record|pipewire-audio|pipewire-bin|pipewire-utils|pipewire-tools|pipewire-tools|pipewire
+audio client (pipewire)|pw-cat|pipewire-audio|pipewire-bin|pipewire-utils|pipewire-tools|pipewire-tools|pipewire
 audio session|wireplumber|wireplumber|wireplumber|wireplumber|wireplumber|wireplumber|wireplumber
 python|python3|python|python3|python3|python3|python3|python3
 pipx|pipx|python-pipx|pipx|pipx|pipx|pipx|pipx

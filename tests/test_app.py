@@ -300,6 +300,83 @@ def test_doctor_all_good_wayland(tmp_path, monkeypatch):
     assert by["ydotoold running"].ok and by["user in group 'input'"].ok
 
 
+def _pipewire_env(tmp_path):
+    (tmp_path / "pipewire-0").write_text("")
+    return {"XDG_SESSION_TYPE": "wayland", "XDG_RUNTIME_DIR": str(tmp_path)}
+
+
+def test_doctor_reports_the_pipewire_capture_backend(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOICETYPE_CONFIG", str(tmp_path / "none.toml"))
+    checks = doctor.run_checks(
+        which=lambda n: "/usr/bin/" + n,
+        env=_pipewire_env(tmp_path),
+        has_module=lambda n: n not in ("sounddevice", "gi"),
+        groups=lambda: set(),
+        path_exists=lambda p: True,
+        access=lambda p, m: True,
+        run=lambda *a: (1, ""),
+    )
+    by = {c.name: c for c in checks}
+    assert by["capture backend"].ok and "pipewire" in by["capture backend"].detail
+    assert by["pw-cat installed"].ok
+
+
+def test_doctor_warns_when_portaudio_takes_the_microphone_away(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[audio]\nbackend = "portaudio"\n')
+    monkeypatch.setenv("VOICETYPE_CONFIG", str(cfg))
+    checks = doctor.run_checks(
+        which=lambda n: "/usr/bin/" + n,
+        env=_pipewire_env(tmp_path),
+        has_module=lambda n: n not in ("sounddevice", "gi"),
+        groups=lambda: set(),
+        path_exists=lambda p: True,
+        access=lambda p, m: True,
+        run=lambda *a: (1, ""),
+    )
+    by = {c.name: c for c in checks}
+    assert not by["capture backend"].ok
+    assert not by["capture backend"].required  # a warning, not a failure
+    assert "pipewire" in by["capture backend"].detail
+
+
+def test_doctor_reports_a_muted_desktop_microphone(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOICETYPE_CONFIG", str(tmp_path / "none.toml"))
+    sources = "Source #3\n\tName: alsa_input.pci-0000_00_1f.3.analog-stereo\n\tMute: yes\n"
+    checks = doctor.run_checks(
+        which=lambda n: "/usr/bin/" + n,
+        env=_pipewire_env(tmp_path),
+        has_module=lambda n: n not in ("sounddevice", "gi"),
+        groups=lambda: set(),
+        path_exists=lambda p: True,
+        access=lambda p, m: True,
+        run=lambda *a: (0, sources) if a[1] == "list" else (0, "alsa_input.pci-0000_00_1f.3.analog-stereo"),
+    )
+    by = {c.name: c for c in checks}
+    assert not by["desktop microphone"].ok
+    assert "muted" in by["desktop microphone"].detail
+
+
+def test_doctor_reports_a_healthy_desktop_microphone(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOICETYPE_CONFIG", str(tmp_path / "none.toml"))
+    sources = (
+        "Source #3\n\tName: alsa_output.pci-0000_00_1f.3.analog-stereo.monitor\n\tMute: no\n"
+        "Source #4\n\tName: alsa_input.pci-0000_00_1f.3.analog-stereo\n\tMute: no\n"
+    )
+    checks = doctor.run_checks(
+        which=lambda n: "/usr/bin/" + n,
+        env=_pipewire_env(tmp_path),
+        has_module=lambda n: n not in ("sounddevice", "gi"),
+        groups=lambda: set(),
+        path_exists=lambda p: True,
+        access=lambda p, m: True,
+        run=lambda *a: (0, sources) if a[1] == "list" else (0, "alsa_input.pci-0000_00_1f.3.analog-stereo"),
+    )
+    by = {c.name: c for c in checks}
+    assert by["desktop microphone"].ok
+    assert by["desktop microphone"].detail == "alsa_input.pci-0000_00_1f.3.analog-stereo"
+
+
 # ---------------------------------------------------------------- models
 def make_zip(path, dirname="vosk-model-small-fa-0.42", evil=False):
     with zipfile.ZipFile(path, "w") as z:

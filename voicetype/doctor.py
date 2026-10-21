@@ -5,10 +5,12 @@ from __future__ import annotations
 import importlib.util
 import os
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .audio import pipewire_available
 from .config import ConfigError, default_config_path, load_config
 from .injector import InjectionError, Tools, choose_backend, detect_session
 from .models import installed
@@ -42,6 +44,46 @@ def _user_groups() -> set[str]:
         return set()
 
 
+def _run(*args: str) -> tuple[int, str]:
+    """Run a command and return ``(exit code, stdout)``; never raises."""
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+    return proc.returncode, proc.stdout
+
+
+def _desktop_microphone(run: Callable[..., tuple[int, str]]) -> tuple[bool, str] | None:
+    """The microphone the *desktop* sees, as opposed to the one VoiceType grabs.
+
+    Returns ``None`` when the information cannot be obtained.
+    """
+    code, out = run("pactl", "list", "sources")
+    if code != 0 or not out.strip():
+        return None
+    mics: list[tuple[str, str]] = []
+    for block in out.split("Source #")[1:]:
+        name = mute = ""
+        for line in block.splitlines():
+            line = line.strip()
+            if line.startswith("Name:"):
+                name = line.split(":", 1)[1].strip()
+            elif line.startswith("Mute:"):
+                mute = line.split(":", 1)[1].strip()
+        if name and not name.endswith(".monitor"):
+            mics.append((name, mute))
+    if not mics:
+        return False, "the desktop exposes no microphone — PipeWire has no input device"
+    muted = [n for n, m in mics if m == "yes"]
+    if muted:
+        return False, f"the microphone is muted: {', '.join(muted)}"
+    code, default = run("pactl", "get-default-source")
+    default = default.strip()
+    if default and default not in [n for n, _ in mics]:
+        return False, f"the default source is '{default}', which is not a microphone"
+    return True, default or mics[0][0]
+
+
 def run_checks(
     which: Callable[[str], str | None] = shutil.which,
     env: dict[str, str] | None = None,
@@ -49,6 +91,7 @@ def run_checks(
     groups: Callable[[], set[str]] = _user_groups,
     path_exists: Callable[[str], bool] = os.path.exists,
     access: Callable[[str, int], bool] = os.access,
+    run: Callable[..., tuple[int, str]] = _run,
 ) -> list[Check]:
     env = dict(os.environ) if env is None else env
     out: list[Check] = []
@@ -97,6 +140,33 @@ def run_checks(
     else:
         out.append(Check("sounddevice installed", False, "pip install sounddevice"))
     out.append(Check("SpeechRecognition installed", has_module("speech_recognition"), "pip install SpeechRecognition"))
+
+    # capture path: PortAudio's ALSA backend opens the raw codec and takes the microphone
+    # away from the audio server, which leaves the whole desktop without a microphone
+    pipewire = pipewire_available(env)
+    backend = cfg.audio.backend if cfg else "auto"
+    if pipewire:
+        if backend == "portaudio":
+            out.append(
+                Check(
+                    "capture backend",
+                    False,
+                    "portaudio grabs the raw ALSA device and takes the microphone away from "
+                    'PipeWire — set [audio] backend = "pipewire"',
+                    required=False,
+                )
+            )
+        else:
+            out.append(Check("capture backend", True, "pipewire (pw-cat) — the desktop keeps its microphone"))
+        out.append(
+            Check("pw-cat installed", bool(which("pw-cat")), "pacman -S pipewire-audio" if not which("pw-cat") else "")
+        )
+        desktop = _desktop_microphone(run)
+        if desktop is not None:
+            ok, detail = desktop
+            out.append(Check("desktop microphone", ok, detail, required=False))
+    else:
+        out.append(Check("capture backend", True, "portaudio (sounddevice)"))
 
     # overlay
     gi_ok = has_module("gi")

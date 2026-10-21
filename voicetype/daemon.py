@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 from . import __version__, network
-from .audio import AudioCapture
+from .audio import AudioCapture, PipeWireCapture, create_capture
 from .config import Config, ConfigManager, OverlayConfig
 from .control import ControlServer
 from .dispatcher import Components, Dispatcher, NullOverlay, Overlay, close_quietly
@@ -57,11 +57,12 @@ def build_components(cfg: Config, on_warning=None) -> Components:
     return Components(cfg, backend, injector, pipeline, translator, post)
 
 
-def audio_factory(on_chunk, cfg: Config, on_error=None) -> AudioCapture:
-    return AudioCapture(
+def audio_factory(on_chunk, cfg: Config, on_error=None) -> AudioCapture | PipeWireCapture:
+    return create_capture(
         on_chunk,
         on_error=on_error,
         device=cfg.audio.device,
+        backend=cfg.audio.backend,
         blocksize=cfg.audio.blocksize,
         max_buffer_seconds=cfg.audio.max_buffer_seconds,
     )

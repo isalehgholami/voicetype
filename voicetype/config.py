@@ -108,6 +108,7 @@ class SttConfig:
 @dataclass(frozen=True)
 class AudioConfig:
     device: str = ""  # "" = system default; name substring or index
+    backend: str = "auto"  # auto | pipewire | portaudio
     blocksize: int = 1600  # samples @16 kHz = 100 ms
     max_buffer_seconds: float = 120.0
     debug_save_audio: bool = False
@@ -229,6 +230,7 @@ _ENUMS: dict[str, tuple[str, ...]] = {
     # HUD has one shape now, so the key is accepted but ignored.
     "overlay.style": ("hud", "pill", "waveform", "vu_meter"),
     "injector.backend": ("auto", "paste", "wtype", "ydotool", "xdotool"),
+    "audio.backend": ("auto", "pipewire", "portaudio"),
     "injector.paste_shortcut": ("auto", "ctrl+v", "ctrl+shift+v"),
     "postprocess.digits": ("keep", "latin", "persian"),
     "translate.backend": ("auto", "services", "googletrans"),
@@ -470,6 +472,7 @@ keyfile = ""
 
 [audio]
 device = ""
+backend = "auto"          # auto | pipewire | portaudio
 blocksize = 1600
 debug_save_audio = false
 pause_media = false        # pause playing media (playerctl) while recording

@@ -56,6 +56,7 @@ VoiceType targets Linux with a Wayland or X11 session. Arch with KDE Plasma 6 on
 | Purpose | Tools | Needed for |
 |---|---|---|
 | Audio server | PipeWire with WirePlumber (`pipewire`, `wireplumber`), or PulseAudio | always |
+| Audio client | `pw-cat` (shipped by `pipewire-audio`) | recording through PipeWire, so the desktop keeps its microphone |
 | Wayland injection | `wl-clipboard` (`wl-copy`) and `ydotool` with a running `ydotoold` | the default paste route on Wayland |
 | Wayland injection (alternative) | `wtype` | typing directly instead of via the clipboard |
 | X11 injection | `xdotool` and `xclip` | injection on X11 |
@@ -436,6 +437,7 @@ keyfile = ""
 
 [audio]
 device = ""
+backend = "auto"          # auto | pipewire | portaudio
 blocksize = 1600
 debug_save_audio = false
 pause_media = false        # pause playing media (playerctl) while recording
@@ -492,6 +494,25 @@ language = "en"          # target language: a code ("en") or a name ("English")
 source = "auto"          # "auto" detects the language you spoke
 timeout_seconds = 15.0   # give up on a translation after this many seconds
 backend = "auto"         # auto | services | googletrans
+```
+
+### How the microphone is captured
+
+`[audio] backend` decides how VoiceType opens the microphone:
+
+| Value | Behaviour |
+|---|---|
+| `auto` *(default)* | `pipewire` when the session has a PipeWire server, otherwise `portaudio` |
+| `pipewire` | records through the audio server with `pw-cat` |
+| `portaudio` | records with `sounddevice` (PortAudio) |
+
+`pipewire` is the right choice on a PipeWire desktop, and it is the default there. PortAudio's ALSA backend opens the raw codec (`hw:0,0`) and holds it exclusively; PipeWire's own capture of the same device then fails with `EBUSY`, its input node dies, and **the microphone disappears from the whole desktop** — it only works inside VoiceType. Recording through `pw-cat` keeps the hardware with the audio server, so every other application can still record.
+
+If the microphone is already missing from your system, bring the input device back after switching the backend:
+
+```bash
+wpctl status                                    # find the card number of "Built-in Audio"
+wpctl set-profile 43 0 && wpctl set-profile 43 1   # 0 = off, 1 = back to duplex
 ```
 
 ## Speech providers
@@ -620,6 +641,7 @@ Start with `voicetype doctor`. Every failing check comes with the command that f
 | Symptom | Fix |
 |---|---|
 | `daemon is not running` | `systemctl --user start voicetype`; the log is in `journalctl --user -u voicetype -f` |
+| The microphone vanished from the desktop | VoiceType took the raw ALSA device away from PipeWire. Keep `[audio] backend = "pipewire"` and re-apply the card profile — see [How the microphone is captured](#how-the-microphone-is-captured). |
 | The shortcut does nothing | Check whether `voicetype toggle` works in a terminal. On Plasma, log out and back in once after the first installation, then re-run `scripts/install-user.sh --hotkey-only` if needed. |
 | The text is not typed | `systemctl --user enable --now ydotool`; check the *text injection backend* line in `doctor`. |
 | The wrong paste in terminals | Install `kdotool`, or set `[injector] paste_shortcut = "ctrl+shift+v"`. |

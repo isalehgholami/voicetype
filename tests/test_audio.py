@@ -5,7 +5,17 @@ import wave
 
 import pytest
 
-from voicetype.audio import AudioCapture, AudioError, BoundedPcmBuffer, rms_level, save_wav
+from voicetype import audio
+from voicetype.audio import (
+    AudioCapture,
+    AudioError,
+    BoundedPcmBuffer,
+    PipeWireCapture,
+    create_capture,
+    pipewire_available,
+    rms_level,
+    save_wav,
+)
 from voicetype.silence import LevelAccumulator, SilenceDetector
 
 
@@ -155,3 +165,179 @@ def test_level_accumulator_ticks():
     ticks = acc.add(0.1, 800)
     assert len(ticks) == 1 and ticks[0] == pytest.approx(0.1)
     assert len(acc.add(0.2, 3200)) == 2
+
+
+# ------------------------------------------------------------------ PipeWire capture
+class FakeStdout:
+    """Mimics ``pw-cat``: it streams the given bytes and then keeps the pipe open."""
+
+    def __init__(self, data: bytes, closed: threading.Event):
+        self._data = data
+        self._pos = 0
+        self._closed = closed
+
+    def read(self, n: int = -1) -> bytes:
+        if self._pos >= len(self._data):
+            self._closed.wait(timeout=5)
+            return b""
+        chunk = self._data[self._pos : self._pos + n]
+        self._pos += len(chunk)
+        return chunk
+
+
+class FakeStderr:
+    def __init__(self, data: bytes):
+        self._lines = [line + b"\n" for line in data.splitlines()]
+
+    def __iter__(self):
+        return iter(self._lines)
+
+
+class FakeProc:
+    def __init__(self, stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0, alive: bool = True):
+        self.closed = threading.Event()
+        self.stdout = FakeStdout(stdout, self.closed)
+        self.stderr = FakeStderr(stderr)
+        self.returncode = returncode
+        self.signals: list[int] = []
+        self.killed = False
+        if not alive:  # the process died on its own
+            self.closed.set()
+
+    def wait(self, timeout=None) -> int:
+        return self.returncode
+
+    def send_signal(self, sig) -> None:
+        self.signals.append(sig)
+        self.closed.set()
+
+    def kill(self) -> None:
+        self.killed = True
+        self.closed.set()
+
+
+def fake_popen(proc: FakeProc, calls: list | None = None):
+    def popen(cmd, **kwargs):
+        if calls is not None:
+            calls.append((cmd, kwargs))
+        return proc
+
+    return popen
+
+
+def test_pipewire_capture_delivers_chunks_and_returns_the_buffer():
+    got: list[bytes] = []
+    proc = FakeProc(stdout=pcm(5) + pcm(7))
+    calls: list = []
+    cap = PipeWireCapture(got.append, popen=fake_popen(proc, calls))
+    cap.start()
+    time.sleep(0.2)
+    data = cap.stop()
+    assert b"".join(got) == pcm(5) + pcm(7)
+    assert data == pcm(5) + pcm(7)
+    assert not cap.running
+
+
+def test_pipewire_capture_asks_pw_cat_for_16k_mono_s16():
+    calls: list = []
+    cap = PipeWireCapture(lambda c: None, popen=fake_popen(FakeProc(), calls))
+    cap.start()
+    time.sleep(0.1)
+    cap.stop()
+    cmd = calls[0][0]
+    assert cmd[0] == "pw-cat"
+    assert "--record" in cmd and "--raw" in cmd
+    assert cmd[cmd.index("--rate") + 1] == "16000"
+    assert cmd[cmd.index("--channels") + 1] == "1"
+    assert cmd[cmd.index("--format") + 1] == "s16"
+    assert cmd[-1] == "-"  # raw samples on stdout
+
+
+def test_pipewire_capture_targets_a_named_node():
+    calls: list = []
+    cap = PipeWireCapture(
+        lambda c: None,
+        device="alsa_input.pci-0000_00_1f.3.analog-stereo",
+        popen=fake_popen(FakeProc(), calls),
+    )
+    cap.start()
+    time.sleep(0.1)
+    cap.stop()
+    cmd = calls[0][0]
+    assert cmd[cmd.index("--target") + 1] == "alsa_input.pci-0000_00_1f.3.analog-stereo"
+
+
+def test_pipewire_capture_reports_a_missing_tool():
+    def popen(cmd, **kwargs):
+        raise FileNotFoundError(cmd[0])
+
+    cap = PipeWireCapture(lambda c: None, popen=popen)
+    with pytest.raises(AudioError, match="pipewire-audio"):
+        cap.start()
+    assert not cap.running
+
+
+def test_pipewire_capture_reports_an_early_death():
+    errors: list[str] = []
+    proc = FakeProc(stderr=b"stream node 210 error: no target node available", returncode=1, alive=False)
+    cap = PipeWireCapture(lambda c: None, on_error=errors.append, popen=fake_popen(proc))
+    cap.start()
+    time.sleep(0.3)
+    assert len(errors) == 1
+    assert errors[0].startswith("Microphone unavailable:")
+    assert "no target node available" in errors[0]
+
+
+def test_pipewire_capture_stays_quiet_when_asked_to_stop():
+    errors: list[str] = []
+    proc = FakeProc(stdout=pcm(1))
+    cap = PipeWireCapture(lambda c: None, on_error=errors.append, popen=fake_popen(proc))
+    cap.start()
+    time.sleep(0.1)
+    cap.stop()
+    time.sleep(0.2)
+    assert errors == []
+
+
+def test_pipewire_capture_keeps_whole_samples_only():
+    got: list[bytes] = []
+    proc = FakeProc(stdout=pcm(3) + b"\x01")  # a trailing half sample
+    cap = PipeWireCapture(got.append, popen=fake_popen(proc))
+    cap.start()
+    time.sleep(0.2)
+    cap.stop()
+    assert all(len(c) % 2 == 0 for c in got)
+
+
+# ------------------------------------------------------------------ backend selection
+def test_pipewire_available_uses_the_session_socket(tmp_path):
+    assert pipewire_available({"XDG_RUNTIME_DIR": str(tmp_path)}) is False
+    (tmp_path / "pipewire-0").write_text("")
+    assert pipewire_available({"XDG_RUNTIME_DIR": str(tmp_path)}) is True
+    assert pipewire_available({"PIPEWIRE_REMOTE": "pipewire-0"}) is True
+
+
+def test_create_capture_prefers_pipewire_on_a_pipewire_desktop(monkeypatch):
+    monkeypatch.setattr(audio, "pipewire_available", lambda env=None: True)
+    assert isinstance(create_capture(lambda c: None), PipeWireCapture)
+
+
+def test_create_capture_falls_back_to_portaudio_without_pipewire(monkeypatch):
+    monkeypatch.setattr(audio, "pipewire_available", lambda env=None: False)
+    assert isinstance(create_capture(lambda c: None), AudioCapture)
+
+
+def test_create_capture_honours_a_pinned_device(monkeypatch):
+    monkeypatch.setattr(audio, "pipewire_available", lambda env=None: True)
+    assert isinstance(create_capture(lambda c: None, device="hw:0,0"), AudioCapture)
+
+
+def test_create_capture_honours_an_explicit_backend(monkeypatch):
+    monkeypatch.setattr(audio, "pipewire_available", lambda env=None: False)
+    assert isinstance(create_capture(lambda c: None, backend="pipewire"), PipeWireCapture)
+    assert isinstance(create_capture(lambda c: None, backend="portaudio"), AudioCapture)
+
+
+def test_create_capture_ignores_an_unknown_backend(monkeypatch):
+    monkeypatch.setattr(audio, "pipewire_available", lambda env=None: False)
+    assert isinstance(create_capture(lambda c: None, backend="nonsense"), AudioCapture)
