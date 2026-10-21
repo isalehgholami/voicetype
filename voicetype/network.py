@@ -190,6 +190,16 @@ def httpx_proxy_url(spec: ProxySpec | None) -> str:
     return spec.url
 
 
+def proxy_url(config_proxy: str = "") -> str:
+    """The active proxy as a URL (``""`` when none is configured).
+
+    The URL keeps the scheme as it was written: ``requests`` (the library the
+    free translation services use) understands ``socks5h`` itself.
+    """
+    spec = effective_proxy(config_proxy)
+    return spec.url if spec else ""
+
+
 def configure(config_proxy: str = "", no_proxy: str = "") -> ProxySpec | None:
     """Install the process-wide urllib opener (and export env vars for other HTTP libraries).
     Returns the active explicit proxy, or None when only the environment applies.

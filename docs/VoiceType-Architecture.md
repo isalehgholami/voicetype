@@ -1331,10 +1331,11 @@ auto_punctuate = true
 
 | TOML path | Default | Valid values | Notes |
 |---|---|---|---|
-| `[translate] enabled` | `false` | `true` / `false` | Translate every finished transcript before it is injected. Needs the optional `googletrans` package. |
+| `[translate] enabled` | `false` | `true` / `false` | Translate every finished transcript before it is injected. Needs the optional `translators` package (the fallback chain) or `googletrans`. |
 | `[translate] language` | `"en"` | a code (`"en"`, `"zh-CN"`) or a name (`"English"`) | The target language. Unknown values are a config error. |
 | `[translate] source` | `"auto"` | `"auto"` or a code / name | `"auto"` detects the language that was spoken. |
-| `[translate] timeout_seconds` | `15.0` | `1.0`–`120.0` | A failed translation never eats the transcript: the original text is injected and the overlay warns. |
+| `[translate] timeout_seconds` | `15.0` | `1.0`–`120.0` | A failed translation never eats the transcript: the original text is injected and the overlay warns. The services share this budget. |
+| `[translate] backend` | `"auto"` | `"auto"` / `"services"` / `"googletrans"` | `services` walks Google, Bing, Yandex and Alibaba until one answers; `googletrans` uses py-googletrans; `auto` prefers the chain. |
 
 **Example — type English while speaking Persian:**
 

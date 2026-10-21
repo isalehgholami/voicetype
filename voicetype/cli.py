@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 
 from . import __version__
@@ -72,10 +73,9 @@ def _config(action: str, repair: bool = False) -> int:
         cfg = load_config()
         if cfg.translate.enabled:
             # the language is only checked when the translator is built
-            from .translate import resolve_language
+            from .translate import check_translate_config
 
-            resolve_language(cfg.translate.language)
-            resolve_language(cfg.translate.source, path="translate.source", allow_auto=True)
+            check_translate_config(cfg.translate)
     except ConfigError as e:
         print(e, file=sys.stderr)
         return 2
@@ -141,24 +141,22 @@ def _models(args: argparse.Namespace) -> int:
 def _translate(args: argparse.Namespace) -> int:
     """``voicetype translate "سلام"`` — try the configured translation."""
     from . import network
-    from .translate import GoogleTranslator, resolve_language, translate_stage
+    from .translate import build_translator, translate_stage
 
+    problems: list[str] = []
     try:
         cfg = load_config()
         network.configure(cfg.network.proxy, cfg.network.no_proxy)
-        target = resolve_language(cfg.translate.language)
-        source = resolve_language(cfg.translate.source, path="translate.source", allow_auto=True)
+        # the command is a manual request: it translates even when the daemon
+        # has the translation switched off
+        translator = build_translator(
+            dataclasses.replace(cfg.translate, enabled=True),
+            proxy=network.proxy_url(cfg.network.proxy),
+            on_warning=problems.append,
+        )
     except (ConfigError, network.ProxyError) as e:
         print(f"voicetype: {e}", file=sys.stderr)
         return 2
-    problems: list[str] = []
-    translator = GoogleTranslator(
-        target,
-        source=source,
-        timeout=cfg.translate.timeout_seconds,
-        proxy=network.httpx_proxy_url(network.effective_proxy(cfg.network.proxy)),
-        on_warning=problems.append,
-    )
     # the same finishing touches the daemon applies (capitalise, sentence mark)
     chain = translate_stage(lambda text: text.strip(), translator, cfg.postprocess)
     try:

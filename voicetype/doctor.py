@@ -160,23 +160,50 @@ def run_checks(
     out.append(Check("faster-whisper installed", has_module("faster_whisper"), "pip install faster-whisper", required=False))
 
     # translation
-    has_translate = has_module("googletrans")
+    has_services = has_module("translators")
     out.append(
         Check(
-            "googletrans installed (translation)",
-            has_translate,
-            "" if has_translate else "pip install googletrans   (or: pip install 'voicetype[translate]')",
+            "translators installed (translation)",
+            has_services,
+            "" if has_services else "pip install translators   (or: pip install 'voicetype[translate]')",
             required=False,
         )
     )
-    if cfg is not None and cfg.translate.enabled and has_translate:
+    has_googletrans = has_module("googletrans")
+    out.append(
+        Check(
+            "googletrans installed (translation fallback)",
+            has_googletrans,
+            "" if has_googletrans else "pip install googletrans   (or: pip install 'voicetype[translate]')",
+            required=False,
+        )
+    )
+    if cfg is not None and cfg.translate.enabled:
+        out.append(Check("translation backend", True, cfg.translate.backend))
         try:
-            from .translate import resolve_language
+            from .translate import check_translate_config, resolve_service_language
 
-            code = resolve_language(cfg.translate.language)
+            check_translate_config(cfg.translate)
+            code = resolve_service_language(cfg.translate.language)
             out.append(Check("translation language", True, f"{cfg.translate.language} → {code}"))
         except ConfigError as e:
             out.append(Check("translation language", False, str(e)))
+        # the packages can be installed and still be blocked — a real request
+        # is the only way to know
+        try:
+            from .translate import probe_services
+
+            ok, detail = probe_services()
+            out.append(
+                Check(
+                    "translation services answer",
+                    ok,
+                    detail,
+                    required=False,
+                )
+            )
+        except Exception as e:  # noqa: BLE001 - a diagnostic must never crash
+            out.append(Check("translation services answer", False, str(e), required=False))
 
     # network / proxy
     try:

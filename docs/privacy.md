@@ -7,7 +7,8 @@
   writes only the *last* recording to `~/.local/state/voicetype/last.wav` for debugging — keep it off.
 - **Transcripts are never logged** (only state transitions, errors, and sizes).
 - **Translation is off by default.** When `[translate] enabled = true` the text of every
-  transcript is sent to Google (py-googletrans) — the same company that already receives
+  transcript is sent to the service that answers — Google, Bing, Yandex or Alibaba (the
+  `translators` package walks them in turn) — the same kind of company that already receives
   your audio with the `google_free` provider. With an offline provider the transcript stays
   on your machine until you switch translation on.
 - The control socket is `$XDG_RUNTIME_DIR/voicetype.sock` with mode 0600; transcribed text is never executed

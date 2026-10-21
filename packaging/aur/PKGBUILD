@@ -28,6 +28,7 @@ optdepends=(
     'playerctl: pause media while recording'
     'libnotify: error notifications'
     'python-googletrans: optional transcript translation'
+    'python-translators: optional transcript translation (fallback chain)'
 )
 install=voicetype.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")

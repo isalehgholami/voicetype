@@ -46,7 +46,7 @@ def build_components(cfg: Config, on_warning=None) -> Components:
     # Translation is optional and off by default; a broken language is a config error.
     translator = build_translator(
         cfg.translate,
-        proxy=network.httpx_proxy_url(network.effective_proxy(cfg.network.proxy)),
+        proxy=network.proxy_url(cfg.network.proxy),
         on_warning=on_warning,
     )
     # The post-processing runs before the translation: the card shows the

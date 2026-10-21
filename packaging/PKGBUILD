@@ -28,6 +28,7 @@ optdepends=(
     'python-pysocks: SOCKS proxy support'
     'python-faster-whisper: offline Whisper recognition (AUR)'
     'python-googletrans: optional transcript translation'
+    'python-translators: optional transcript translation (fallback chain)'
 )
 provides=("$_pkgname")
 conflicts=("$_pkgname")

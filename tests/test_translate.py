@@ -13,10 +13,16 @@ from voicetype.dispatcher import Components, Dispatcher
 from voicetype.postprocess import Pipeline
 from voicetype.translate import (
     GoogleTranslator,
+    ServiceTranslator,
     build_translator,
+    check_translate_config,
     language_label,
     resolve_language,
+    resolve_service_language,
+    service_language_label,
+    translate_fa_to_en,
     translate_stage,
+    translate_with_fallback,
 )
 
 #: A stand-in for the tables of py-googletrans (the package is optional).
@@ -129,7 +135,7 @@ def test_build_translator_reports_a_missing_package(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", no_googletrans)
     with pytest.raises(ConfigError, match="googletrans"):
-        build_translator(TranslateConfig(enabled=True))
+        build_translator(TranslateConfig(enabled=True, backend="googletrans"))
 
 
 # ---------------------------------------------------------------- the translator
@@ -301,6 +307,8 @@ def fake_translator(monkeypatch):
 
     monkeypatch.setattr("voicetype.translate.GoogleTranslator", Fake)
     monkeypatch.setattr("voicetype.translate.resolve_language", lambda value, **kw: "en")
+    # the fallback chain needs its optional package — the fake stands in for it
+    monkeypatch.setattr("voicetype.translate.services_available", lambda: False)
     return problems
 
 
@@ -334,3 +342,245 @@ def test_cli_config_check_rejects_an_unknown_language(tmp_path, monkeypatch, cap
     (tmp_path / "c.toml").write_text('[translate]\nenabled = true\nlanguage = "klingon"\n', encoding="utf-8")
     assert cli.main(["config", "check"]) == 2
     assert "translate.language" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- the fallback chain
+def test_the_services_are_tried_in_order():
+    calls: list[str] = []
+
+    def fake(text, **kwargs):
+        calls.append(kwargs["translator"])
+        return "Hello world."
+
+    assert translate_with_fallback("سلام", "fa", "en", translate=fake) == "Hello world."
+    assert calls == ["google"]
+
+
+def test_a_failing_service_is_skipped():
+    calls: list[str] = []
+
+    def fake(text, **kwargs):
+        calls.append(kwargs["translator"])
+        if kwargs["translator"] == "google":
+            raise RuntimeError("Unexpected status code 429")
+        return "Hello world."
+
+    assert translate_with_fallback("سلام", "fa", "en", translate=fake) == "Hello world."
+    assert calls == ["google", "bing"]
+
+
+def test_every_service_failing_keeps_the_original_text():
+    warnings: list[str] = []
+
+    def fake(text, **kwargs):
+        raise RuntimeError("Unexpected status code 429")
+
+    out = translate_with_fallback("سلام", "fa", "en", translate=fake, on_warning=warnings.append)
+    assert out == "سلام"
+    assert warnings and "429" in warnings[0]
+
+
+def test_an_empty_answer_goes_to_the_next_service():
+    calls: list[str] = []
+
+    def fake(text, **kwargs):
+        calls.append(kwargs["translator"])
+        if kwargs["translator"] == "google":
+            return "   "
+        return "Hello world."
+
+    assert translate_with_fallback("سلام", "fa", "en", translate=fake) == "Hello world."
+    assert calls == ["google", "bing"]
+
+
+def test_the_languages_are_forwarded():
+    seen: dict = {}
+
+    def fake(text, **kwargs):
+        seen.update(kwargs)
+        return "Hello."
+
+    translate_with_fallback("سلام", "fa", "en", translate=fake)
+    assert seen["from_language"] == "fa"
+    assert seen["to_language"] == "en"
+
+
+def test_the_services_share_the_time_budget():
+    seen: list[float] = []
+
+    def fake(text, **kwargs):
+        seen.append(kwargs["timeout"])
+        raise RuntimeError("nope")
+
+    translate_with_fallback("سلام", "fa", "en", translate=fake, timeout=5.0)
+    assert len(seen) == 4  # every service is tried
+    assert all(t <= 5.0 for t in seen)  # nobody gets more than the budget
+    assert seen[-1] <= seen[0]  # the budget shrinks
+
+
+def test_an_empty_text_is_never_translated():
+    def fake(text, **kwargs):  # pragma: no cover - must never be called
+        raise AssertionError("an empty text must not be translated")
+
+    assert translate_with_fallback("", "fa", "en", translate=fake) == ""
+
+
+# ---------------------------------------------------------------- the service translator
+def test_the_service_translator_keeps_the_original_text_on_failure():
+    warnings: list[str] = []
+
+    def fake(text, **kwargs):
+        raise RuntimeError("no network")
+
+    translator = ServiceTranslator("en", source="fa", translate=fake, on_warning=warnings.append)
+    assert translator.translate("سلام") == "سلام"
+    assert warnings and "no network" in warnings[0]
+
+
+def test_the_service_translator_translates():
+    def fake(text, **kwargs):
+        return "Hello, how are you?"
+
+    translator = ServiceTranslator("en", source="fa", translate=fake)
+    assert translator.translate("سلام") == "Hello, how are you?"
+
+
+def test_the_service_translator_carries_the_name_of_its_language():
+    assert ServiceTranslator("en").label == "ENGLISH"
+    assert ServiceTranslator("fa").label == "PERSIAN"
+
+
+def test_the_service_translator_ignores_an_empty_text():
+    calls: list[str] = []
+
+    def fake(text, **kwargs):
+        calls.append(text)
+        return "Hello."
+
+    translator = ServiceTranslator("en", translate=fake)
+    assert translator.translate("   ") == "   "
+    assert calls == []
+
+
+# ---------------------------------------------------------------- the utility
+def test_translate_fa_to_en_is_empty_for_an_empty_text():
+    assert translate_fa_to_en("") == ""
+    assert translate_fa_to_en(None) == ""
+
+
+def test_translate_fa_to_en_uses_the_fallback_chain(monkeypatch):
+    calls: list[tuple[str, str, str]] = []
+
+    def fake(text, **kwargs):
+        calls.append((kwargs["translator"], kwargs["from_language"], kwargs["to_language"]))
+        if kwargs["translator"] == "google":
+            raise RuntimeError("Unexpected status code 429")
+        return "Hello, how are you?"
+
+    monkeypatch.setattr("voicetype.translate.services._default_translate", fake)
+    assert translate_fa_to_en("سلام، حال شما چطور است؟") == "Hello, how are you?"
+    assert calls[0] == ("google", "fa", "en")
+    assert calls[1] == ("bing", "fa", "en")
+
+
+# ---------------------------------------------------------------- the languages of the services
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("en", "en"),
+        ("EN", "en"),
+        ("english", "en"),
+        ("English", "en"),
+        ("persian", "fa"),
+        ("fa-IR", "fa"),
+        ("zh-CN", "zh"),
+        ("zh-TW", "zh-Hant"),
+        ("zh-Hant", "zh-Hant"),
+        ("german", "de"),
+    ],
+)
+def test_resolve_service_language(value, expected):
+    assert resolve_service_language(value) == expected
+
+
+def test_resolve_service_language_may_be_auto():
+    assert resolve_service_language("auto", path="translate.source", allow_auto=True) == "auto"
+
+
+def test_resolve_service_language_rejects_the_unknown():
+    with pytest.raises(ConfigError, match="translate.language"):
+        resolve_service_language("klingon")
+    with pytest.raises(ConfigError, match="translate.language"):
+        resolve_service_language("")
+
+
+def test_the_service_language_label():
+    assert service_language_label("en") == "ENGLISH"
+    assert service_language_label("fa") == "PERSIAN"
+    assert service_language_label("xx") == "XX"
+    assert service_language_label("") == ""
+
+
+# ---------------------------------------------------------------- the backend
+def test_the_translate_backend_is_parsed():
+    cfg = parse_config({"translate": {"enabled": True, "backend": "services"}})
+    assert cfg.translate.backend == "services"
+
+
+def test_an_unknown_translate_backend_is_rejected():
+    with pytest.raises(ConfigError, match="translate.backend"):
+        parse_config({"translate": {"backend": "magic"}})
+
+
+def test_build_translator_prefers_the_fallback_chain(monkeypatch):
+    monkeypatch.setattr("voicetype.translate.services_available", lambda: True)
+    translator = build_translator(TranslateConfig(enabled=True))
+    try:
+        assert isinstance(translator, ServiceTranslator)
+    finally:
+        translator.close()
+
+
+def test_build_translator_falls_back_to_googletrans(monkeypatch):
+    monkeypatch.setattr("voicetype.translate.services_available", lambda: False)
+    translator = build_translator(TranslateConfig(enabled=True))
+    try:
+        assert isinstance(translator, GoogleTranslator)
+    finally:
+        translator.close()
+
+
+def test_build_translator_reports_a_missing_services_package(monkeypatch):
+    monkeypatch.setattr("voicetype.translate.services_available", lambda: False)
+    with pytest.raises(ConfigError, match="translators"):
+        build_translator(TranslateConfig(enabled=True, backend="services"))
+
+
+def test_check_translate_config_accepts_a_known_language():
+    check_translate_config(TranslateConfig(enabled=True, language="persian"))
+
+
+def test_check_translate_config_rejects_an_unknown_language():
+    with pytest.raises(ConfigError, match="translate.language"):
+        check_translate_config(TranslateConfig(enabled=True, language="klingon", backend="services"))
+
+
+def test_cli_translate_uses_the_fallback_chain(tmp_path, monkeypatch, capsys):
+    from voicetype import cli
+
+    class Fake:
+        def __init__(self, *args, **kwargs):
+            self.on_warning = kwargs.get("on_warning")
+
+        def translate(self, text):
+            return "Hello world."
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("voicetype.translate.services_available", lambda: True)
+    monkeypatch.setattr("voicetype.translate.ServiceTranslator", Fake)
+    monkeypatch.setenv("VOICETYPE_CONFIG", str(tmp_path / "c.toml"))
+    (tmp_path / "c.toml").write_text('[translate]\nlanguage = "en"\n', encoding="utf-8")
+    assert cli.main(["translate", "سلام دنیا"]) == 0
+    assert "Hello world." in capsys.readouterr().out

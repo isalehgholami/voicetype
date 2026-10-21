@@ -987,9 +987,9 @@ else
     ALL_EXTRAS="socks"
 fi
 
-# googletrans is always installed: the daemon validates the config with it and
-# 'voicetype config check' fails without it — no matter whether the translation
-# is switched on in the config
+# the translation packages are always installed: the daemon validates the
+# config with them and 'voicetype config check' fails without them — no matter
+# whether the translation is switched on in the config
 ALL_EXTRAS="$(printf '%s\n%s\n' "$ALL_EXTRAS" "translate")"
 
 FINAL_EXTRAS="$(printf '%s\n' "$ALL_EXTRAS" | tr ' ' '\n' | dedupe | tr '\n' ' ')"
@@ -1442,9 +1442,9 @@ else
     CONFIG_STATUS="invalid"
     res_warn "the config could not be repaired automatically — run: voicetype config check   (it shows the reason)"
     reason="$("$PIPX_BIN_DIR/voicetype" config check 2>&1 | head -n2 || true)"
-    if printf '%s' "$reason" | grep -qi "googletrans"; then
+    if printf '%s' "$reason" | grep -qiE "googletrans|translators"; then
         res_info "the reason: $reason"
-        res_info "fix it with: pipx install 'voicetype[translate]'   (or: pip install googletrans)"
+        res_info "fix it with: pipx install 'voicetype[translate]'   (or: pip install translators googletrans)"
     fi
 fi
 case "$CONFIG_STATUS" in

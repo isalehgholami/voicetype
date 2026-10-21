@@ -68,7 +68,7 @@ VoiceType targets Linux with a Wayland or X11 session. Arch with KDE Plasma 6 on
 
 The package names above are the Arch ones. The installer maps them for every supported distribution; the Debian and Ubuntu names differ for a few of them: `libgtk-4-1`, `gir1.2-gtklayershell-0.0`, `python3-gi`, `python3-cairo`, `libnotify-bin`, `python3`, and `pipx`.
 
-Python dependencies are declared in `pyproject.toml` and installed by the installer: `sounddevice` and `SpeechRecognition` are required, while `vosk`, `faster-whisper`, `evdev`, `PySocks`, and `googletrans` are optional extras.
+Python dependencies are declared in `pyproject.toml` and installed by the installer: `sounddevice` and `SpeechRecognition` are required, while `vosk`, `faster-whisper`, `evdev`, `PySocks`, `translators`, and `googletrans` are optional extras.
 
 Two further requirements apply to specific features:
 
@@ -395,6 +395,7 @@ Custom replacements are defined in `[postprocess.custom_replacements]`. Keys tha
 | `language` | `"en"` | The target language, either a code such as `en` or `zh-CN` or a name such as `English`. |
 | `source` | `"auto"` | The source language. `auto` detects what you spoke. |
 | `timeout_seconds` | `15.0` | Give up on a translation after this many seconds. Range 1 to 120. |
+| `backend` | `"auto"` | `services` walks Google, Bing, Yandex and Alibaba until one answers; `googletrans` uses py-googletrans; `auto` takes the fallback chain when it is installed. |
 
 ### The complete file
 
@@ -490,6 +491,7 @@ enabled = false          # translate the transcript into `language` before injec
 language = "en"          # target language: a code ("en") or a name ("English")
 source = "auto"          # "auto" detects the language you spoke
 timeout_seconds = 15.0   # give up on a translation after this many seconds
+backend = "auto"         # auto | services | googletrans
 ```
 
 ## Speech providers
@@ -546,9 +548,11 @@ source = "auto"      # "auto" detects the language you spoke
 voicetype translate "سلام دنیا"    # → Hello world.
 ```
 
-The Persian clean-up runs on your words first, then the translation rewrites them in the target language, and the result is typed at the cursor. If Google cannot be reached, the original text is injected unchanged and the overlay shows a warning. A failed translation never discards your words.
+The Persian clean-up runs on your words first, then the translation rewrites them in the target language, and the result is typed at the cursor. If no service answers, the original text is injected unchanged and the overlay shows a warning. A failed translation never discards your words.
 
-`googletrans` is installed by the installer regardless of whether translation is enabled, so that turning translation on later needs no further installation and `voicetype config check` can validate the configured language. See [docs/translation.md](docs/translation.md).
+The translation goes through the free endpoints of the big providers — Google, Bing, Yandex and Alibaba are tried in turn, and the first one that answers wins. No API key, no account. A single service is not enough on its own: the free endpoints rate-limit (HTTP 429) and block (HTTP 403) regularly, so the chain moves on to the next one.
+
+The `translators` and `googletrans` packages are installed by the installer regardless of whether translation is enabled, so that turning translation on later needs no further installation and `voicetype config check` can validate the configured language. See [docs/translation.md](docs/translation.md).
 
 ## Behind a firewall
 
@@ -568,7 +572,7 @@ SOCKS proxies need PySocks, which the `socks` extra installs. Use `socks5h` when
 ## Privacy and security
 
 - The `google_free` provider uploads your microphone audio to Google. Use `vosk` or `whisper` for fully offline operation. See [docs/privacy.md](docs/privacy.md).
-- With translation enabled, the text of your transcript is sent to Google as well.
+- With translation enabled, the text of your transcript is sent to the service that answers — Google, Bing, Yandex or Alibaba.
 - Audio is not stored unless you set `[audio] debug_save_audio = true`, which writes the last recording to `~/.local/state/voicetype/last.wav`. Transcripts are never written to the log.
 - The control socket at `$XDG_RUNTIME_DIR/voicetype.sock` is created with mode `0600`, so only your own user can talk to the daemon.
 - Transcribed text is never passed to a shell. Control characters are stripped before injection, so a transcript cannot act as an input command.

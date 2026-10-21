@@ -173,6 +173,7 @@ class TranslateConfig:
     language: str = "en"  # target language: a code ("en") or a name ("English")
     source: str = "auto"  # "auto" detects the language that was spoken
     timeout_seconds: float = 15.0
+    backend: str = "auto"  # auto | services | googletrans
 
 
 @dataclass(frozen=True)
@@ -230,6 +231,7 @@ _ENUMS: dict[str, tuple[str, ...]] = {
     "injector.backend": ("auto", "paste", "wtype", "ydotool", "xdotool"),
     "injector.paste_shortcut": ("auto", "ctrl+v", "ctrl+shift+v"),
     "postprocess.digits": ("keep", "latin", "persian"),
+    "translate.backend": ("auto", "services", "googletrans"),
     "log_level": ("DEBUG", "INFO", "WARNING", "ERROR"),
 }
 #: Palette names are matched case-insensitively, like the theme resolver.
@@ -523,6 +525,7 @@ enabled = false          # translate the transcript into `language` before injec
 language = "en"          # target language: a code ("en") or a name ("English")
 source = "auto"          # "auto" detects the language you spoke
 timeout_seconds = 15.0   # give up on a translation after this many seconds
+backend = "auto"         # auto | services | googletrans
 """
 
 
