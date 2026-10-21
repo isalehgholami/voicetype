@@ -7,7 +7,7 @@
 #
 #   scripts/install-user.sh [extras] [options]
 #
-#   extras    comma separated list of: socks, vosk, whisper, hotkey
+#   extras    comma separated list of: socks, vosk, whisper, hotkey, translate
 #             (default: socks). Extras of a previous run are kept, so re-running
 #             the script never silently removes a feature you installed.
 #   options   --reinstall     rebuild the venv from scratch
@@ -36,7 +36,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/install-user.sh [extras] [options]
 
-  extras    comma separated: socks, vosk, whisper, hotkey   (default: socks)
+  extras    comma separated: socks, vosk, whisper, hotkey, translate   (default: socks)
             extras installed by a previous run are kept
   options   --reinstall     rebuild the venv from scratch
             --reset-extras  install exactly the requested extras
@@ -123,7 +123,7 @@ except ImportError:
     sys.exit(1)
 with open("pyproject.toml", "rb") as fh:
     print(" ".join(tomllib.load(fh)["project"]["optional-dependencies"]))
-' 2>/dev/null || printf '%s' "socks vosk whisper hotkey dev"
+' 2>/dev/null || printf '%s' "socks vosk whisper hotkey translate dev"
 }
 
 # ------------------------------------------------------------------ state

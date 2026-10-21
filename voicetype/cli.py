@@ -36,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     models.add_argument("action", choices=["list", "install"])
     models.add_argument("name", nargs="?")
     models.add_argument("--sha256", help="expected SHA-256 of the archive")
+    tr = sub.add_parser("translate", help="translate a text into [translate] language")
+    tr.add_argument("text", help="the text to translate")
     return p
 
 
@@ -67,7 +69,13 @@ def _config(action: str, repair: bool = False) -> int:
             print(f"already exists: {result.path}")
         return 0
     try:
-        load_config()
+        cfg = load_config()
+        if cfg.translate.enabled:
+            # the language is only checked when the translator is built
+            from .translate import resolve_language
+
+            resolve_language(cfg.translate.language)
+            resolve_language(cfg.translate.source, path="translate.source", allow_auto=True)
     except ConfigError as e:
         print(e, file=sys.stderr)
         return 2
@@ -130,6 +138,40 @@ def _models(args: argparse.Namespace) -> int:
     return 0
 
 
+def _translate(args: argparse.Namespace) -> int:
+    """``voicetype translate "سلام"`` — try the configured translation."""
+    from . import network
+    from .translate import GoogleTranslator, resolve_language, translate_stage
+
+    try:
+        cfg = load_config()
+        network.configure(cfg.network.proxy, cfg.network.no_proxy)
+        target = resolve_language(cfg.translate.language)
+        source = resolve_language(cfg.translate.source, path="translate.source", allow_auto=True)
+    except (ConfigError, network.ProxyError) as e:
+        print(f"voicetype: {e}", file=sys.stderr)
+        return 2
+    problems: list[str] = []
+    translator = GoogleTranslator(
+        target,
+        source=source,
+        timeout=cfg.translate.timeout_seconds,
+        proxy=network.httpx_proxy_url(network.effective_proxy(cfg.network.proxy)),
+        on_warning=problems.append,
+    )
+    # the same finishing touches the daemon applies (capitalise, sentence mark)
+    chain = translate_stage(lambda text: text.strip(), translator, cfg.postprocess)
+    try:
+        out = chain(args.text)
+    finally:
+        translator.close()
+    if problems:
+        print(f"voicetype: {problems[0]}", file=sys.stderr)
+        return 1
+    print(out)
+    return 0
+
+
 def _safe_streams() -> None:
     """Never crash on a non-UTF-8 terminal (C locale, ssh): replace unencodable characters."""
     for stream in (sys.stdout, sys.stderr):
@@ -169,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         return _config(args.action, args.repair)
     if args.cmd == "models":
         return _models(args)
+    if args.cmd == "translate":
+        return _translate(args)
     return 2
 
 

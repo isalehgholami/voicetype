@@ -13,5 +13,7 @@ Start with `voicetype doctor` — every `✗` has an install hint.
 | Stops recording too early in a noisy room | raise `[stt] silence_threshold_seconds`; threshold auto-calibrates from the first 0.6 s |
 | `cannot open microphone` | `pw-record test.wav`; `[audio] device = "<name substring>"` |
 | Wrong Persian spacing | `[postprocess] normalize_zwnj = false` or add custom replacements |
+| The text is not translated | `[translate] enabled = true` + `voicetype reload`; `doctor` → "googletrans installed"; try `voicetype translate "سلام"` |
+| `config: 'translate.language' is not a known language` | use a code (`"en"`) or a name (`"English"`) — see [translation.md](translation.md) |
 
 Debug a recording: `[audio] debug_save_audio = true` → `~/.local/state/voicetype/last.wav`; log level: `log_level = "DEBUG"`.

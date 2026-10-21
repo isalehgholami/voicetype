@@ -12,6 +12,7 @@ Priority: ``[network] proxy`` in config  >  ``VOICETYPE_PROXY``  >  the standard
 
 from __future__ import annotations
 
+import dataclasses
 import http.client
 import os
 import ssl
@@ -174,6 +175,19 @@ def effective_proxy(config_proxy: str = "") -> ProxySpec | None:
     """Config value, else ``VOICETYPE_PROXY``; None means "use the standard environment variables"."""
     text = config_proxy.strip() or os.environ.get(ENV_PROXY, "").strip()
     return parse_proxy(text) if text else None
+
+
+def httpx_proxy_url(spec: ProxySpec | None) -> str:
+    """The proxy as a URL httpx understands (``socks5h`` → ``socks5``).
+
+    httpx has no ``socks5h`` scheme, so the remote-DNS variant is downgraded;
+    everything else is passed through unchanged.
+    """
+    if spec is None:
+        return ""
+    if spec.scheme == "socks5h":
+        spec = dataclasses.replace(spec, scheme="socks5")
+    return spec.url
 
 
 def configure(config_proxy: str = "", no_proxy: str = "") -> ProxySpec | None:

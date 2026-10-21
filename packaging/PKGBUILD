@@ -27,6 +27,7 @@ optdepends=(
     'python-evdev: hold-to-talk hotkey'
     'python-pysocks: SOCKS proxy support'
     'python-faster-whisper: offline Whisper recognition (AUR)'
+    'python-googletrans: optional transcript translation'
 )
 provides=("$_pkgname")
 conflicts=("$_pkgname")

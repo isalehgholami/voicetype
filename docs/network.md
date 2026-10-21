@@ -1,7 +1,8 @@
 # Network & proxy
 
-VoiceType talks to the internet only for: **Google speech** (default provider), **Google Cloud** (optional) and **model downloads**
-(`voicetype models install`, faster-whisper). Offline providers (`vosk`, `whisper` with a downloaded model) need no network.
+VoiceType talks to the internet only for: **Google speech** (default provider), **Google Cloud** (optional), **model downloads**
+(`voicetype models install`, faster-whisper) and — when it is switched on — **translation** ([translation.md](translation.md)).
+Offline providers (`vosk`, `whisper` with a downloaded model) need no network.
 
 If you're behind a firewall or your connection is flaky, route everything through a proxy.
 
@@ -49,6 +50,7 @@ The systemd service doesn't inherit your shell environment — put the proxy in 
 - SOCKS is applied to VoiceType's own HTTP client only. Local Unix sockets (the control channel) are never touched.
 - The proxy password is never logged; logs and `doctor` print `socks5h://user:***@host:1080`.
 - The proxy is also exported as `HTTP(S)_PROXY` / `ALL_PROXY` inside the process so downloads done by third-party libraries (faster-whisper model fetch, Google Cloud client) use it too. Those libraries may need their own SOCKS extras.
+- The **translation** uses httpx, which reads the same variables. `socks5h` is downgraded to `socks5` for that request (httpx does not know the scheme); a SOCKS proxy therefore also needs `socksio` — it comes with the `translate` extra.
 
 ## Troubleshooting
 

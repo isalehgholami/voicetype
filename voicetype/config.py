@@ -139,6 +139,14 @@ class NetworkConfig:
 
 
 @dataclass(frozen=True)
+class TranslateConfig:
+    enabled: bool = False  # translate the transcript before it is injected
+    language: str = "en"  # target language: a code ("en") or a name ("English")
+    source: str = "auto"  # "auto" detects the language that was spoken
+    timeout_seconds: float = 15.0
+
+
+@dataclass(frozen=True)
 class Config:
     log_level: str = "INFO"
     notify_errors: bool = True  # desktop notification (notify-send) on errors
@@ -149,6 +157,7 @@ class Config:
     injector: InjectorConfig = field(default_factory=InjectorConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
+    translate: TranslateConfig = field(default_factory=TranslateConfig)
 
 
 # ---------------------------------------------------------------- validation
@@ -173,6 +182,10 @@ LEGACY_THEME_NAMES = ("dark", "light")
 
 #: ``overlay.accent`` is either empty (the palette decides) or a hex colour.
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+
+#: A language is a code ("en", "zh-CN") or a name ("English", "chinese").  The
+#: exact spelling is checked against py-googletrans when the translator is built.
+_LANGUAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,31}$")
 
 _ENUMS: dict[str, tuple[str, ...]] = {
     "hotkey.toggle_mode": ("press", "hold"),
@@ -207,6 +220,7 @@ _RANGES: dict[str, tuple[float, float]] = {
     "overlay.fade_ms": (0, 1000),
     "overlay.transcript_words": (1, 12),
     "injector.typing_delay_ms": (0, 50),
+    "translate.timeout_seconds": (1.0, 120.0),
 }
 
 
@@ -234,6 +248,16 @@ def _check_accent(path: str, value: str) -> None:
         return
     if not _HEX_COLOR_RE.match(value):
         raise _fail(path, f"must be empty or a hex colour like '#7aa2f7' (got {value!r})")
+
+
+def _check_language(path: str, value: str) -> None:
+    """A language is a code ("en") or a name ("English"); the exact spelling is
+    verified later, when py-googletrans is available."""
+    text = value.strip()
+    if not text:
+        raise _fail(path, "must not be empty")
+    if not _LANGUAGE_RE.match(text):
+        raise _fail(path, f"must be a language code or name like 'en' or 'English' (got {value!r})")
 
 
 def _build(cls: type, data: dict[str, Any], prefix: str):
@@ -289,6 +313,8 @@ def _build(cls: type, data: dict[str, Any], prefix: str):
             continue
         if path == "overlay.accent":
             _check_accent(path, value)
+        if path in ("translate.language", "translate.source"):
+            _check_language(path, value)
         if path in _ENUMS and value not in _ENUMS[path]:
             raise _fail(path, f"must be one of {', '.join(_ENUMS[path])} (got {value!r})")
         if path in _RANGES:
@@ -457,6 +483,12 @@ voice_commands = false
 
 [postprocess.custom_replacements]
 # "می شود" = "می‌شود"
+
+[translate]
+enabled = false          # translate the transcript into `language` before injecting it
+language = "en"          # target language: a code ("en") or a name ("English")
+source = "auto"          # "auto" detects the language you spoke
+timeout_seconds = 15.0   # give up on a translation after this many seconds
 """
 
 

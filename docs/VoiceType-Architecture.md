@@ -1322,8 +1322,24 @@ auto_punctuate = true
 "کد:" = "کدِ"
 ```
 
-### 10.6 Multi-Profile Customization (Stretch Goal)
+### 10.6 Translation Customization
 
+| TOML path | Default | Valid values | Notes |
+|---|---|---|---|
+| `[translate] enabled` | `false` | `true` / `false` | Translate every finished transcript before it is injected. Needs the optional `googletrans` package. |
+| `[translate] language` | `"en"` | a code (`"en"`, `"zh-CN"`) or a name (`"English"`) | The target language. Unknown values are a config error. |
+| `[translate] source` | `"auto"` | `"auto"` or a code / name | `"auto"` detects the language that was spoken. |
+| `[translate] timeout_seconds` | `15.0` | `1.0`–`120.0` | A failed translation never eats the transcript: the original text is injected and the overlay warns. |
+
+**Example — type English while speaking Persian:**
+
+```toml
+[translate]
+enabled = true
+language = "en"
+```
+
+### 10.7 Multi-Profile Customization (Stretch Goal)
 A future `~/.config/voicetype/profiles/` directory will allow per-application profiles — for example, a "code" profile that disables auto-punctuation when typing in a JetBrains IDE, and a "writing" profile that keeps punctuation on elsewhere. Each `.toml` file in `profiles/` becomes a profile selectable via a second hotkey (e.g. `Super+Alt+P` to cycle). This is not in v1; see §11.
 
 ---

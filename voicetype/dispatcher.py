@@ -75,6 +75,18 @@ class Components:
     backend: STTBackend
     injector: Any  # .inject(text)
     pipeline: Callable[[str], str]
+    translator: Any = None  # .translate(text) / .close(); None when translation is off
+
+
+def _close_quietly(obj: Any) -> None:
+    """Close a component (backend, translator) without letting it break the daemon."""
+    close = getattr(obj, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception:  # noqa: BLE001
+        log.exception("closing %s failed", type(obj).__name__)
 
 
 class Dispatcher:
@@ -235,12 +247,14 @@ class Dispatcher:
 
     def _apply_pending_locked(self) -> None:
         if self._pending is not None and self._state is State.IDLE:
-            old, self._c, self._pending = self._c.backend, self._pending, None
-            if old is not self._c.backend:
+            old, self._c, self._pending = self._c, self._pending, None
+            if old.backend is not self._c.backend:
                 try:
-                    old.close()
+                    old.backend.close()
                 except Exception:  # noqa: BLE001
                     log.exception("closing old backend failed")
+            if old.translator is not self._c.translator:
+                _close_quietly(old.translator)
             log.info("configuration applied")
 
     # ------------------------------------------------------------------ audio path (audio thread)
@@ -452,3 +466,4 @@ class Dispatcher:
             self._c.backend.close()
         except Exception:  # noqa: BLE001
             log.exception("backend close failed")
+        _close_quietly(self._c.translator)

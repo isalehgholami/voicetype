@@ -18,6 +18,7 @@ from .notify import Notifier
 from .overlay import create_overlay
 from .postprocess import Pipeline
 from .stt.registry import build_backend
+from .translate import build_translator, translate_stage
 
 log = get_logger("daemon")
 
@@ -32,17 +33,24 @@ class _BrokenInjector:
         raise InjectionError(self.reason)
 
 
-def build_components(cfg: Config, on_fallback=None) -> Components:
+def build_components(cfg: Config, on_warning=None) -> Components:
     # Proxy first: providers and model downloads must already see it. Raises ProxyError (e.g. PySocks
     # missing) so a broken proxy never silently falls back to a direct connection.
     network.configure(cfg.network.proxy, cfg.network.no_proxy)
-    backend = build_backend(cfg, on_fallback)
+    backend = build_backend(cfg, on_warning)
     try:
         injector = TextInjector(cfg.injector)
     except InjectionError as e:
         log.error("%s", e)
         injector = _BrokenInjector(str(e))
-    return Components(cfg, backend, injector, Pipeline(cfg.postprocess))
+    # Translation is optional and off by default; a broken language is a config error.
+    translator = build_translator(
+        cfg.translate,
+        proxy=network.httpx_proxy_url(network.effective_proxy(cfg.network.proxy)),
+        on_warning=on_warning,
+    )
+    pipeline = translate_stage(Pipeline(cfg.postprocess), translator, cfg.postprocess)
+    return Components(cfg, backend, injector, pipeline, translator)
 
 
 def audio_factory(on_chunk, cfg: Config, on_error=None) -> AudioCapture:
@@ -62,10 +70,10 @@ class Daemon:
         setup_logging(cfg.log_level)
         self.overlay = create_overlay(cfg.overlay)
         self.dispatcher = Dispatcher(
-            build_components(cfg, on_fallback=self._on_fallback),
+            build_components(cfg, on_warning=self._on_warning),
             audio_factory,
             self.overlay,
-            build=lambda c: build_components(c, on_fallback=self._on_fallback),
+            build=lambda c: build_components(c, on_warning=self._on_warning),
             media=MediaPauser(),
             notifier=Notifier(),
         )
@@ -73,7 +81,7 @@ class Daemon:
         self._stop = threading.Event()
         self._hotkey = None
 
-    def _on_fallback(self, message: str) -> None:
+    def _on_warning(self, message: str) -> None:
         self.dispatcher.warn(message)
 
     # ------------------------------------------------------------------ commands

@@ -142,6 +142,25 @@ def run_checks(
     out.append(Check("vosk model installed", bool(models), ", ".join(models) or "voicetype models install fa-small", required=False))
     out.append(Check("faster-whisper installed", has_module("faster_whisper"), "pip install faster-whisper", required=False))
 
+    # translation
+    has_translate = has_module("googletrans")
+    out.append(
+        Check(
+            "googletrans installed (translation)",
+            has_translate,
+            "" if has_translate else "pip install googletrans   (or: pip install 'voicetype[translate]')",
+            required=False,
+        )
+    )
+    if cfg is not None and cfg.translate.enabled and has_translate:
+        try:
+            from .translate import resolve_language
+
+            code = resolve_language(cfg.translate.language)
+            out.append(Check("translation language", True, f"{cfg.translate.language} → {code}"))
+        except ConfigError as e:
+            out.append(Check("translation language", False, str(e)))
+
     # network / proxy
     try:
         from .network import ProxyError, effective_proxy

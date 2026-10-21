@@ -9,7 +9,7 @@ browser, Telegram, terminal, IDE, LibreOffice.
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Arch%20Linux%20%C2%B7%20KDE%20Plasma%206-1793D1?logo=archlinux&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-406_passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-665_passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 [Features](#-features) · [How it works](#-how-it-works) · [Requirements](#-requirements) · [Quick start](#-quick-start) · [Usage](#-usage) · [Configuration](#%EF%B8%8F-configuration) · [Providers](#%EF%B8%8F-speech-providers) · [Development](#%EF%B8%8F-development) · [Troubleshooting](#-troubleshooting) · [Docs](#%EF%B8%8F-documentation) · [فارسی](README.fa.md)
@@ -22,13 +22,14 @@ browser, Telegram, terminal, IDE, LibreOffice.
 
 - **Persian-first dictation** with correct half-spaces (ZWNJ), Persian punctuation and digits.
 - **Mixed Persian + English** — technical terms are normalised: «پایتون» → `Python`, «گیت‌هاب» → `GitHub` (40+ terms, extensible).
+- **Optional translation** — every transcript can be translated into English (or any other language) before it is typed. Off by default.
 - **Works in any app** — text is injected at the cursor via clipboard paste (Wayland: `wl-copy` + `ydotool`; X11: `xdotool`). Your previous clipboard is restored.
 - **Floating overlay** (GTK4 + layer-shell): never steals focus, click-through. Three styles (`pill`, `waveform`, `vu_meter`), animated states (recording / paused / processing / error / success) and a live word-by-word transcript preview. Themed with a built-in palette or your own CSS file ([theming](docs/theming.md)).
 - **Multiple speech engines** — Google (free), Vosk (offline, streaming), Whisper (offline, most accurate), Google Cloud. Automatic fallback after repeated failures.
 - **Smart stop** — adaptive silence detection that calibrates to your room noise, or stop it yourself.
 - **Hardened** — the control socket is `0600`, transcribed text is never executed, control characters are stripped.
 - **Self-diagnosing** — `voicetype doctor` tells you what's missing and how to install it.
-- **Well tested** — 385 automated tests; the core runs without a microphone, network or GUI.
+- **Well tested** — 665 automated tests; the core runs without a microphone, network or GUI.
 
 > **Status: v0.1.** The core is unit-tested, but the parts that need a real desktop (overlay, shortcut registration, paste injection, microphone) must be verified on your machine. Run `voicetype doctor` first and see [docs/inject-matrix.md](docs/inject-matrix.md).
 
@@ -44,9 +45,9 @@ browser, Telegram, terminal, IDE, LibreOffice.
         │                       → INJECTING → IDLE
         ▼                                │
   Silence detector                       ▼
-        │              STT provider ─► Post-processing ─► Text injector
-        └─────────────► (Google/Vosk/       (ZWNJ, digits,     (paste into the
-                         Whisper)            English terms)     focused app)
+        │              STT provider ─► Post-processing ─► Translation ─► Text injector
+        └─────────────► (Google/Vosk/       (ZWNJ, digits,     (optional)    (paste into the
+                         Whisper)            English terms)                   focused app)
 ```
 
 ## 📋 Requirements
@@ -102,7 +103,7 @@ If your desktop isn't KDE, bind the command `voicetype-toggle` to a key in your 
 ### Optional extras
 
 ```bash
-./scripts/install-user.sh socks,vosk,whisper,hotkey   # pick any: socks · vosk · whisper · hotkey
+./scripts/install-user.sh socks,vosk,whisper,hotkey,translate   # pick any: socks · vosk · whisper · hotkey · translate
 ./scripts/install-user.sh --reinstall                 # rebuild the pipx venv from scratch
 ./scripts/install-user.sh --reset-extras socks        # install exactly these extras (drop the others)
 ./scripts/install-user.sh --no-hotkey                 # leave the KDE shortcut alone
@@ -135,6 +136,7 @@ voicetype net-test [--proxy URL] [--url URL]  check connectivity through the con
 voicetype config init|path|check             create / locate / validate the config file
 voicetype config init --repair              like init, but a broken config is backed up and replaced
 voicetype models list|install <fa-small|fa> [--sha256 …]  download / verify a Vosk model
+voicetype translate "سلام دنیا"              translate a text into [translate] language
 ```
 
 ### Profiles
@@ -190,6 +192,10 @@ digits = "keep"                 # keep | latin | persian
 [postprocess.custom_replacements]
 "می شود" = "می‌شود"
 "re:\\bqt\\d\\b" = "Qt"         # keys starting with re: are regular expressions
+
+[translate]                     # optional — off by default
+enabled = false
+language = "en"                 # "en", "English", "de", "zh-CN", …
 ```
 
 For palettes and custom themes: [docs/theming.md](docs/theming.md). The default `pill` style paints fixed colours, so the palette is only visible in the `waveform` and `vu_meter` styles.
@@ -223,8 +229,31 @@ Failed segments are retried at the end, and a recording whose speech couldn't be
 
 Compare them on your own voice: record the 50-sentence corpus and run the benchmark ([docs/benchmarks.md](docs/benchmarks.md)).
 
-## 🌐 Behind a firewall? Use a proxy
+## 🌍 Translate what you speak (optional)
 
+Speak Persian, get English — or any other language. The translation is **off by default**:
+
+```bash
+./scripts/install-user.sh translate        # installs py-googletrans
+```
+
+```toml
+[translate]
+enabled = true
+language = "en"      # "en", "English", "de", "zh-CN", … — the target language
+source = "auto"      # "auto" detects what you spoke
+```
+
+```bash
+voicetype translate "سلام دنیا"    # → Hello world.
+```
+
+The Persian clean-up runs on your words, the translation rewrites them in the target
+language, and the result is typed at the cursor. If Google cannot be reached, your
+original text is injected unchanged (with a warning in the overlay) — a translation
+never eats your words. Details: [docs/translation.md](docs/translation.md).
+
+## 🌐 Behind a firewall? Use a proxy
 Internet blocked or unreliable? Send all of VoiceType's traffic (Google speech, model downloads) through an HTTP or SOCKS proxy:
 
 ```toml
@@ -241,6 +270,7 @@ SOCKS needs PySocks (`./scripts/install-user.sh socks`). If the proxy is unusabl
 ## 🔒 Privacy & security
 
 - `google_free` uploads your audio to Google. Use `vosk` or `whisper` for fully offline operation — see [docs/privacy.md](docs/privacy.md).
+- Translation is off by default; when it is on, the *text* of your transcript is sent to Google too.
 - No audio is stored by default; transcripts are never written to logs.
 - The control socket `$XDG_RUNTIME_DIR/voicetype.sock` is mode `0600`; transcribed text is never passed to a shell or executed.
 
@@ -251,7 +281,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 ruff check .          # lint
-pytest                # 385 tests, no microphone / network / GUI needed
+pytest                # 665 tests, no microphone / network / GUI needed
 ```
 
 - The core (config, dispatcher, STT, post-processing, injector logic) runs on any OS; GTK, evdev and PortAudio are imported lazily.
@@ -266,7 +296,7 @@ pytest                # 385 tests, no microphone / network / GUI needed
 ### Project layout
 
 ```
-voicetype/        daemon, dispatcher, audio, stt/, postprocess/, injector, overlay, control, cli …
+voicetype/        daemon, dispatcher, audio, stt/, postprocess/, translate/, injector, overlay, control, cli …
 tests/            unit + integration tests (fixed WAV fixture, 50-sentence corpus)
 scripts/          setup-arch.sh, install-user.sh, install-hotkey.sh, bench.py, record_corpus.py, release.sh
 packaging/        PKGBUILD, systemd user unit, .desktop files, AUR package
@@ -292,7 +322,7 @@ More: [docs/troubleshooting.md](docs/troubleshooting.md) · [docs/known-issues.m
 
 ## 🗺️ Documentation
 
-[Architecture](docs/VoiceType-Architecture.md) (read the errata first) · [Decisions (ADRs)](docs/adr/) · [Theming](docs/theming.md) · [Post-processing](docs/postprocess.md) · [Network & proxy](docs/network.md) · [Privacy](docs/privacy.md) · [Injection matrix](docs/inject-matrix.md) · [Benchmarks](docs/benchmarks.md)
+[Architecture](docs/VoiceType-Architecture.md) (read the errata first) · [Decisions (ADRs)](docs/adr/) · [Theming](docs/theming.md) · [Post-processing](docs/postprocess.md) · [Translation](docs/translation.md) · [Network & proxy](docs/network.md) · [Privacy](docs/privacy.md) · [Injection matrix](docs/inject-matrix.md) · [Benchmarks](docs/benchmarks.md)
 
 ## 🙏 Credits
 

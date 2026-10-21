@@ -3,6 +3,11 @@
 Pipeline order (every stage can be switched off in `[postprocess]`):
 `strip → hallucination filter → custom replacements → English terms → ZWNJ → digits → Persian punctuation → capitalize → auto-punctuate`.
 
+When the optional [translation](translation.md) is enabled, the order becomes
+`… → auto-punctuate → translate → capitalize → auto-punctuate`: the Persian clean-up runs on
+the text as it was spoken, the translation rewrites it in the target language, and the
+capitalisation and the sentence-final mark are applied once more to the result.
+
 ## Decisions for Persian (T-3.2.6)
 
 - **Capitalization:** Persian has no case; `capitalize_first` only touches a leading ASCII letter (and is skipped when the text starts with a digit).

@@ -11,3 +11,4 @@
 9. **KDE shortcut registration** (`install-hotkey.sh`) writes `kglobalshortcutsrc` directly; the format can vary between Plasma releases — fall back to System Settings → Shortcuts → Add Command.
 10. **Segmented streaming sends more requests to Google** (one per sentence + a refresh every `stream_interim_seconds`). If the free endpoint rate-limits you, set `stream_interim_seconds = 0` or `streaming = false`.
 11. **Streaming for Google is simulated** (cut at pauses), not a true duplex stream — Google offers no official streaming for the free endpoint. Words can differ slightly between the live preview and the final text.
+12. **Translation uses an unofficial endpoint** (py-googletrans / Google Translate web API): it can be rate-limited or blocked, and the wording is not always idiomatic. A failed translation never eats the transcript — the original text is injected and the overlay warns.
