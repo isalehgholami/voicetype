@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from . import __version__
-from .config import ConfigError, default_config_path, ensure_default_config, load_config
+from .config import ConfigError, default_config_path, ensure_default_config, load_config, repair_config
 from .control import COMMANDS, send_command
 
 CLIENT_COMMANDS = tuple(c for c in COMMANDS if c != "profile")
@@ -27,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     nt.add_argument("--proxy", default=None, help="try this proxy instead of the configured one")
     cfg = sub.add_parser("config", help="configuration helpers")
     cfg.add_argument("action", choices=["init", "path", "check"])
+    cfg.add_argument(
+        "--repair",
+        action="store_true",
+        help="'init': back up an invalid config and write a fresh one",
+    )
     models = sub.add_parser("models", help="manage offline Vosk models")
     models.add_argument("action", choices=["list", "install"])
     models.add_argument("name", nargs="?")
@@ -44,13 +49,22 @@ def _client(cmd: str) -> int:
     return 0 if reply.startswith("ok") else 1
 
 
-def _config(action: str) -> int:
+def _config(action: str, repair: bool = False) -> int:
     if action == "path":
         print(default_config_path())
         return 0
     if action == "init":
-        path, created = ensure_default_config()
-        print(f"{'created' if created else 'already exists'}: {path}")
+        if not repair:
+            path, created = ensure_default_config()
+            print(f"{'created' if created else 'already exists'}: {path}")
+            return 0
+        result = repair_config()
+        if result.status == "repaired":
+            print(f"repaired: {result.path} (the broken config was backed up as {result.backup})")
+        elif result.status == "created":
+            print(f"created: {result.path}")
+        else:
+            print(f"already exists: {result.path}")
         return 0
     try:
         load_config()
@@ -152,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "net-test":
         return _net_test(args)
     if args.cmd == "config":
-        return _config(args.action)
+        return _config(args.action, args.repair)
     if args.cmd == "models":
         return _models(args)
     return 2

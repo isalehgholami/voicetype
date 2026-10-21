@@ -81,6 +81,17 @@ voicetype doctor                   # every required line should be [✓]
 > `cd packaging && makepkg -si` (`python-sounddevice` and `python-speechrecognition` come from the AUR — use `yay`/`paru`).
 > Different shortcut: `HOTKEY=Ctrl+Alt+Space ./scripts/install-user.sh`.
 
+The installer is idempotent — **run it again after `git pull`**:
+
+```bash
+git pull && ./scripts/install-user.sh     # updates the code + dependencies, repairs a broken install
+```
+
+It updates the installed code *and* its dependencies, rebuilds a broken venv, rewrites the systemd
+user unit, restarts the daemon so the new code is live, and makes sure
+`~/.config/voicetype/config.toml` exists (a broken config is backed up as `config.toml.bak-<timestamp>`
+and replaced by the defaults — your settings are never lost).
+
 Now click into any text field, press **Super + Alt + V**, speak, and press it again (or just stay silent for 3 s).
 
 ### Other distros
@@ -92,8 +103,13 @@ If your desktop isn't KDE, bind the command `voicetype-toggle` to a key in your 
 
 ```bash
 ./scripts/install-user.sh socks,vosk,whisper,hotkey   # pick any: socks · vosk · whisper · hotkey
+./scripts/install-user.sh --reinstall                 # rebuild the pipx venv from scratch
+./scripts/install-user.sh --reset-extras socks        # install exactly these extras (drop the others)
+./scripts/install-user.sh --no-hotkey                 # leave the KDE shortcut alone
 voicetype models install fa-small                     # download the Persian Vosk model (~53 MB)
 ```
+
+Extras of a previous run are kept, so re-running the script never silently removes a feature you installed.
 
 ## 🎮 Usage
 
@@ -117,6 +133,7 @@ voicetype profile [name|next|default]        list / switch config profiles
 voicetype doctor                             environment checklist with install hints
 voicetype net-test [--proxy URL] [--url URL]  check connectivity through the configured proxy
 voicetype config init|path|check             create / locate / validate the config file
+voicetype config init --repair              like init, but a broken config is backed up and replaced
 voicetype models list|install <fa-small|fa> [--sha256 …]  download / verify a Vosk model
 ```
 
@@ -135,7 +152,7 @@ capitalize_first = false
 
 ## ⚙️ Configuration
 
-Everything lives in `~/.config/voicetype/config.toml` (override with `VOICETYPE_CONFIG`). **Every key is optional** — create the fully commented defaults with `voicetype config init`, validate edits with `voicetype config check`, apply them with `voicetype reload`.
+Everything lives in `~/.config/voicetype/config.toml` (override with `VOICETYPE_CONFIG`). **Every key is optional** — create the fully commented defaults with `voicetype config init`, validate edits with `voicetype config check`, apply them with `voicetype reload`. If the file ever gets broken, `voicetype config init --repair` (and the installer) back it up as `config.toml.bak-<timestamp>` and write the defaults again.
 
 ```toml
 [stt]

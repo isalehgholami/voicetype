@@ -18,6 +18,15 @@ set -euo pipefail
 COMBO="${1:-Meta+Alt+V}"
 TOGGLE="$(command -v voicetype-toggle || true)"
 if [ -z "$TOGGLE" ]; then
+    # ~/.local/bin is often not in the PATH of a desktop session — look it up directly
+    for dir in "${PIPX_BIN_DIR:-}" "$HOME/.local/bin"; do
+        if [ -n "$dir" ] && [ -x "$dir/voicetype-toggle" ]; then
+            TOGGLE="$dir/voicetype-toggle"
+            break
+        fi
+    done
+fi
+if [ -z "$TOGGLE" ]; then
     TOGGLE="voicetype-toggle"
 fi
 

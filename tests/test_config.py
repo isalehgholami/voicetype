@@ -10,6 +10,7 @@ from voicetype.config import (
     ensure_default_config,
     load_config,
     parse_config,
+    repair_config,
 )
 
 
@@ -84,6 +85,41 @@ def test_ensure_default_config_creates_once(tmp_path):
     assert created and path.exists()
     _, created2 = ensure_default_config(p)
     assert not created2
+
+
+def test_repair_config_creates_a_missing_file(tmp_path):
+    p = tmp_path / "config.toml"
+    result = repair_config(p)
+    assert result.status == "created"
+    assert result.backup is None
+    assert p.read_text(encoding="utf-8") == SAMPLE_CONFIG
+
+
+def test_repair_config_keeps_a_valid_file(tmp_path):
+    p = write(tmp_path, '[stt]\nlanguage = "en-US"\n')
+    result = repair_config(p)
+    assert result.status == "ok"
+    assert result.backup is None
+    assert p.read_text(encoding="utf-8") == '[stt]\nlanguage = "en-US"\n'
+
+
+def test_repair_config_backs_up_an_invalid_file(tmp_path):
+    p = write(tmp_path, "not = valid = toml [")
+    result = repair_config(p)
+    assert result.status == "repaired"
+    assert result.backup is not None and result.backup.exists()
+    assert result.backup.read_text(encoding="utf-8") == "not = valid = toml ["
+    assert p.read_text(encoding="utf-8") == SAMPLE_CONFIG
+    assert load_config(p) == Config()
+
+
+def test_repair_config_backups_do_not_overwrite_each_other(tmp_path):
+    p = write(tmp_path, "broken [")
+    first = repair_config(p)
+    write(tmp_path, "broken [")
+    second = repair_config(p)
+    assert first.backup != second.backup
+    assert first.backup.exists() and second.backup.exists()
 
 
 def test_reload_keeps_old_on_error(tmp_path):

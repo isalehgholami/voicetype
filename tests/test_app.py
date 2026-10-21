@@ -110,6 +110,31 @@ def test_config_commands(tmp_path, monkeypatch, capsys):
     assert "stt.provider" in capsys.readouterr().err
 
 
+def test_config_init_repair_fixes_a_broken_file(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "cfg" / "c.toml"
+    p.parent.mkdir(parents=True)
+    p.write_text("not = valid = toml [", encoding="utf-8")
+    monkeypatch.setenv("VOICETYPE_CONFIG", str(p))
+    assert cli.main(["config", "init", "--repair"]) == 0
+    out = capsys.readouterr().out
+    assert "repaired" in out
+    assert cli.main(["config", "check"]) == 0
+    backups = list(p.parent.glob("c.toml.bak-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "not = valid = toml ["
+
+
+def test_config_init_repair_keeps_a_valid_file(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "cfg" / "c.toml"
+    p.parent.mkdir(parents=True)
+    p.write_text('[stt]\nlanguage = "en-US"\n', encoding="utf-8")
+    monkeypatch.setenv("VOICETYPE_CONFIG", str(p))
+    assert cli.main(["config", "init", "--repair"]) == 0
+    assert "already exists" in capsys.readouterr().out
+    assert p.read_text(encoding="utf-8") == '[stt]\nlanguage = "en-US"\n'
+    assert not list(p.parent.glob("c.toml.bak-*"))
+
+
 # ---------------------------------------------------------------- doctor
 def test_doctor_reports_missing_tools_with_hints():
     checks = doctor.run_checks(

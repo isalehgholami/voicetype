@@ -44,12 +44,25 @@ voicetype doctor                   # همه‌ی موارد الزامی بای�
 
 داخل یک فیلد متن کلیک کنید، **Super + Alt + V** را بزنید، حرف بزنید و دوباره بزنید (یا ۳ ثانیه سکوت کنید).
 
+اسکریپت نصب idempotent است — **بعد از `git pull` دوباره اجرایش کنید**:
+
+```bash
+git pull && ./scripts/install-user.sh     # به‌روزرسانی کد و وابستگی‌ها + ترمیم نصب خراب
+```
+
+کد نصب‌شده و وابستگی‌هایش را به‌روز می‌کند، اگر venv خراب باشد از نو می‌سازد، یونیت systemd را دوباره می‌نویسد، دیمون را ری‌استارت می‌کند و مطمئن می‌شود `~/.config/voicetype/config.toml` وجود دارد (فایل خراب با نام `config.toml.bak-<timestamp>` پشتیبان می‌شود و تنظیمات پیش‌فرض جایگزین آن می‌شود — تنظیمات شما پاک نمی‌شود).
+
 ### افزونه‌های اختیاری
 
 ```bash
 ./scripts/install-user.sh socks,vosk,whisper,hotkey   # هرکدام را بخواهید: socks · vosk · whisper · hotkey
+./scripts/install-user.sh --reinstall                 # ساخت دوباره‌ی venv پیکس
+./scripts/install-user.sh --reset-extras socks        # نصب دقیقاً همین افزونه‌ها
+./scripts/install-user.sh --no-hotkey                 # دست‌نزدن به میان‌بر KDE
 voicetype models install fa-small     # مدل فارسی Vosk (حدود ۵۳ مگابایت)
 ```
+
+افزونه‌های نصب‌شده در اجرای قبلی حفظ می‌شوند؛ پس اجرای دوباره‌ی اسکریپت هیچ قابلیتی را بی‌سروصدا حذف نمی‌کند.
 
 ## 🎮 استفاده
 
@@ -65,7 +78,7 @@ voicetype models install fa-small     # مدل فارسی Vosk (حدود ۵۳ م
 
 ## ⚙️ تنظیمات
 
-همه‌چیز در `~/.config/voicetype/config.toml` است و **همه‌ی کلیدها اختیاری‌اند**. با `voicetype config init` فایل کامنت‌دار پیش‌فرض را بسازید و با `voicetype config check` بررسی کنید.
+همه‌چیز در `~/.config/voicetype/config.toml` است و **همه‌ی کلیدها اختیاری‌اند**. با `voicetype config init` فایل کامنت‌دار پیش‌فرض را بسازید و با `voicetype config check` بررسی کنید. اگر فایل خراب شد، `voicetype config init --repair` (و اسکریپت نصب) آن را با نام `config.toml.bak-<timestamp>` پشتیبان می‌گیرد و پیش‌فرض‌ها را دوباره می‌نویسد.
 
 ```toml
 [stt]

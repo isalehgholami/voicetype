@@ -5,11 +5,13 @@ from __future__ import annotations
 import dataclasses
 import os
 import re
+import shutil
 import threading
+import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 ENV_CONFIG = "VOICETYPE_CONFIG"
 
@@ -387,6 +389,48 @@ def ensure_default_config(path: Path | None = None) -> tuple[Path, bool]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(SAMPLE_CONFIG, encoding="utf-8")
     return path, True
+
+
+class ConfigRepair(NamedTuple):
+    """Result of :func:`repair_config`."""
+
+    path: Path
+    status: str  # "created" | "repaired" | "ok"
+    backup: Path | None = None
+
+
+def config_backup_path(path: Path) -> Path:
+    """A free backup name next to ``path`` (``config.toml.bak-20260101-120000``)."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    candidate = path.with_name(f"{path.name}.bak-{stamp}")
+    n = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}.bak-{stamp}-{n}")
+        n += 1
+    return candidate
+
+
+def repair_config(path: Path | None = None) -> ConfigRepair:
+    """Make sure a *usable* config file exists.
+
+    * missing file  → written from :data:`SAMPLE_CONFIG` (``status="created"``)
+    * invalid file  → copied to ``config.toml.bak-<timestamp>`` and replaced by the
+      sample (``status="repaired"``) — the user's settings are never thrown away
+    * valid file    → left untouched (``status="ok"``)
+    """
+    path = path or default_config_path()
+    if not path.exists():
+        ensure_default_config(path)
+        return ConfigRepair(path, "created")
+    try:
+        load_config(path)
+    except ConfigError:
+        backup = config_backup_path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, backup)
+        path.write_text(SAMPLE_CONFIG, encoding="utf-8")
+        return ConfigRepair(path, "repaired", backup)
+    return ConfigRepair(path, "ok")
 
 
 class ConfigManager:
