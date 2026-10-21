@@ -241,10 +241,17 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/voicetype-install.XXXXXX")"
 
 # a second installer must not fight the first one over the same files
-if have flock && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "${XDG_RUNTIME_DIR}" ]; then
-    lock_file="$XDG_RUNTIME_DIR/voicetype-install.lock"
-    # a runtime directory that cannot be written to must not look like a
-    # running installation — so the lock is only used when it can be created
+lock_dir="${XDG_RUNTIME_DIR:-}"
+if [ -z "$lock_dir" ] || [ ! -d "$lock_dir" ]; then
+    # no runtime directory (ssh, container) — a private directory in /tmp
+    lock_dir="/tmp/voicetype-$(id -u)"
+    mkdir -p "$lock_dir" 2>/dev/null || lock_dir=""
+    chmod 700 "$lock_dir" 2>/dev/null || true
+fi
+if have flock && [ -n "$lock_dir" ] && [ -d "$lock_dir" ]; then
+    lock_file="$lock_dir/install.lock"
+    # a directory that cannot be written to must not look like a running
+    # installation — so the lock is only used when it can be created
     if : > "$lock_file" 2>/dev/null; then
         if exec 9>>"$lock_file"; then
             if ! flock -n 9; then
@@ -342,7 +349,10 @@ pm_install_one() {
 
 # role | how it is detected | package name per distribution
 # (columns: arch, debian, fedora, suse, alpine, void)
-REQUIREMENTS='audio server|pw-record|pipewire|pipewire|pipewire|pipewire|pipewire|pipewire
+# note: the pw-* tools live in their own package on most distributions
+# (pipewire-audio, pipewire-bin, pipewire-utils, pipewire-tools)
+REQUIREMENTS='audio daemon|pkg:pipewire|pipewire|pipewire|pipewire|pipewire|pipewire|pipewire
+audio tools|pw-record|pipewire-audio|pipewire-bin|pipewire-utils|pipewire-tools|pipewire-tools|pipewire
 audio session|wireplumber|wireplumber|wireplumber|wireplumber|wireplumber|wireplumber|wireplumber
 python|python3|python|python3|python3|python3|python3|python3
 pipx|pipx|python-pipx|pipx|pipx|pipx|pipx|pipx
@@ -411,8 +421,8 @@ if ! PIPX_JSON="$(pipx list --json 2>/dev/null)"; then
     warn "could not read the pipx state — treating this as a fresh installation"
     PIPX_JSON='{}'
 fi
-INSTALLED="$(pipx_field installed)"
-PREV_SPEC="$(pipx_field spec)"
+INSTALLED="$(pipx_field installed || true)"
+PREV_SPEC="$(pipx_field spec || true)"
 
 PIPX_BIN_DIR="$(pipx_env PIPX_BIN_DIR)"
 [ -n "$PIPX_BIN_DIR" ] || PIPX_BIN_DIR="$HOME/.local/bin"
@@ -433,6 +443,9 @@ fi
 
 if [ "$RESET_EXTRAS" -eq 1 ]; then
     ALL_EXTRAS="$REQ_EXTRAS"
+    if [ -z "$(printf '%s' "$ALL_EXTRAS" | tr -d '[:space:]')" ]; then
+        warn "--reset-extras without a list drops every extra (only 'translate' is always installed)"
+    fi
 elif [ -n "$(printf '%s' "$REQ_EXTRAS" | tr -d '[:space:]')" ]; then
     ALL_EXTRAS="$(printf '%s\n%s\n' "$REQ_EXTRAS" "$PREV_EXTRAS")"
 elif [ -n "$(printf '%s' "$PREV_EXTRAS" | tr -d '[:space:]')" ]; then
@@ -471,10 +484,19 @@ ACTION="installed"
 CONFIG_STATUS="unknown"
 CONFIG_FILE="${VOICETYPE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/voicetype/config.toml}"
 # a leading ~ is not expanded by the shell when it comes from an environment
-# variable — do it here, so "~/..." works everywhere
+# variable — do it here, so "~/..." and "~user/..." work everywhere
 case "$CONFIG_FILE" in
     "~") CONFIG_FILE="$HOME" ;;
     "~/"*) CONFIG_FILE="$HOME/${CONFIG_FILE:2}" ;;
+    "~"*)
+        # "~user/..." — the home directory of another user
+        rest="${CONFIG_FILE:1}"
+        user="${rest%%/*}"
+        user_home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
+        if [ -n "$user_home" ]; then
+            CONFIG_FILE="$user_home${rest#"$user"}"
+        fi
+        ;;
 esac
 SERVICE_STATE="not started (no systemd user session)"
 HOTKEY_STATE="not registered"
@@ -528,7 +550,8 @@ else
                 continue
             fi
             if pm_installed "$pkg"; then
-                res_ok "$role (package '$pkg' is installed)"
+                # the package is there, but the tool is not — a broken install
+                res_warn "$role — the package '$pkg' is installed, but '$tool' is missing"
                 continue
             fi
             SYS_MISSING="$SYS_MISSING $pkg"
@@ -762,7 +785,7 @@ check_add "ok" "python environment" "$PIPX_BIN_DIR/voicetype"
 # remember the extras — pipx's metadata is not always available
 # (the file is comma separated, exactly like the "extras" argument)
 if ! mkdir -p "$STATE_DIR" 2>/dev/null ||
-    ! printf '%s' "$(printf '%s' "$FINAL_EXTRAS" | tr ' ' ',')" > "$EXTRAS_STATE" 2>/dev/null; then
+    ! printf '%s\n' "$(printf '%s' "$FINAL_EXTRAS" | tr ' ' ',')" 2>/dev/null > "$EXTRAS_STATE"; then
     res_warn "could not remember the extras in $EXTRAS_STATE"
 fi
 
@@ -796,7 +819,8 @@ print(f"{r.status}: {r.path}" + (f" (backup: {r.backup})" if r.backup else ""))
 write_config_guide() {
     local path="$1"
     local tmp="$path.tmp.$$"
-    {
+    # a failing guide must never abort the installation
+    if ! {
         cat <<EOF
 # ─────────────────────────────────────────────────────────────────────────
 #  VoiceType — quick guide
@@ -812,9 +836,30 @@ write_config_guide() {
 # ─────────────────────────────────────────────────────────────────────────
 EOF
         cat "$path"
-    } > "$tmp"
-    chmod 600 "$tmp"
-    mv -f "$tmp" "$path"
+    } > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        return 1
+    fi
+    chmod 600 "$tmp" 2>/dev/null || true
+    if ! mv -f "$tmp" "$path"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    return 0
+}
+
+# the backup of this very run — the CLI reports it, a file name alone is not
+# reliable (a backup keeps the timestamp of the file it was copied from)
+reported_backup() {
+    local line="$1" found=""
+    found="$(printf '%s' "$line" | sed -n 's/.*backed up as \(.*\))/\1/p')"
+    [ -n "$found" ] || found="$(printf '%s' "$line" | sed -n 's/.*backup: \(.*\))/\1/p')"
+    if [ -n "$found" ] && [ -f "$found" ]; then
+        printf '%s' "$found"
+        return 0
+    fi
+    # no report — take the one with the newest name
+    ls -1 "$CONFIG_FILE".bak-* 2>/dev/null | sort | tail -n1 || true
 }
 
 CONFIG_EXISTED=0
@@ -824,23 +869,35 @@ if [ -f "$CONFIG_FILE" ]; then
     "$PIPX_BIN_DIR/voicetype" config check >/dev/null 2>&1 || CONFIG_WAS_VALID=0
 fi
 
-CONFIG_LINE="$(ensure_config)" || die "could not create the configuration file"
-info "  $CONFIG_LINE"
+if ! CONFIG_LINE="$(ensure_config)"; then
+    # a config that cannot be written must not stop the whole installation
+    res_warn "could not create the configuration file — check the path: $CONFIG_FILE"
+    CONFIG_LINE=""
+fi
+[ -n "$CONFIG_LINE" ] && info "  $CONFIG_LINE"
 
 if [ "$CONFIG_EXISTED" -eq 0 ]; then
-    CONFIG_STATUS="created"
-    write_config_guide "$CONFIG_FILE"
-    res_ok "created: $CONFIG_FILE (with a short guide)"
+    if [ -f "$CONFIG_FILE" ]; then
+        CONFIG_STATUS="created"
+        if write_config_guide "$CONFIG_FILE"; then
+            res_ok "created: $CONFIG_FILE (with a short guide)"
+        else
+            res_ok "created: $CONFIG_FILE"
+            res_warn "could not add the guide to the config — check the permissions of $CONFIG_FILE"
+        fi
+    else
+        CONFIG_STATUS="invalid"
+        res_warn "there is no config file at $CONFIG_FILE — run: voicetype config init"
+    fi
 elif [ "$CONFIG_WAS_VALID" -eq 1 ]; then
     CONFIG_STATUS="ok"
     res_ok "kept your config: $CONFIG_FILE"
 elif "$PIPX_BIN_DIR/voicetype" config check >/dev/null 2>&1; then
     CONFIG_STATUS="repaired"
-    # the backup is named "config.toml.bak-<timestamp>" — the newest one is the
-    # last in alphabetical order (a copy keeps the old timestamp)
-    backup="$(ls -1 "$CONFIG_FILE".bak-* 2>/dev/null | sort | tail -n1 || true)"
     # the file was replaced by the sample → it gets the guide too
-    write_config_guide "$CONFIG_FILE"
+    write_config_guide "$CONFIG_FILE" ||
+        res_warn "could not add the guide to the config — check the permissions of $CONFIG_FILE"
+    backup="$(reported_backup "$CONFIG_LINE")"
     if [ -n "$backup" ]; then
         res_ok "repaired: $CONFIG_FILE (the broken file was backed up as $backup)"
     else
@@ -867,45 +924,100 @@ step "Service unit"
 
 LIB_DIR="$HOME/.local/lib/voicetype"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT_WRITTEN=0
+SERVICE_ENABLED=0
 
 if [ "$DO_SERVICE" -eq 0 ]; then
     res_skip "skipped (--no-service)"
     SERVICE_STATE="skipped (--no-service)"
-elif ! systemd_user_available; then
-    res_skip "no systemd user session — start the daemon later with: systemctl --user enable --now voicetype"
-    SERVICE_STATE="not started (no systemd user session)"
-    warn "no systemd user session here — start the daemon later with: systemctl --user enable --now voicetype"
 elif [ ! -f packaging/voicetype.service ] || [ ! -f packaging/wait-display ]; then
     res_warn "packaging/voicetype.service or packaging/wait-display is missing — no unit written"
     SERVICE_STATE="not installed (the packaging files are missing)"
 else
-    mkdir -p "$LIB_DIR" "$UNIT_DIR"
-    install -m755 packaging/wait-display "$LIB_DIR/wait-display"
-
-    # write the unit atomically: a half-written file would break the daemon
-    unit_tmp="$UNIT_DIR/.voicetype.service.$$"
-    UNIT_TMP="$unit_tmp"
-    sed -e "s#/usr/lib/voicetype/wait-display#$(sed_escape "$LIB_DIR/wait-display")#" \
-        -e "s#/usr/bin/voicetype#$(sed_escape "$PIPX_BIN_DIR/voicetype")#g" \
-        packaging/voicetype.service > "$unit_tmp"
-    # the daemon has to read the same config file the installer writes
-    # (systemd splits Environment= on whitespace → the value must be quoted)
-    if [ -n "${VOICETYPE_CONFIG:-}" ]; then
-        sed -i "s#^Environment=PYTHONUNBUFFERED=1#Environment=PYTHONUNBUFFERED=1\nEnvironment=\"VOICETYPE_CONFIG=$(sed_escape "$(systemd_escape "$CONFIG_FILE")")\"#" \
-            "$unit_tmp"
-    fi
-    chmod 644 "$unit_tmp"
-    mv -f "$unit_tmp" "$UNIT_DIR/voicetype.service"
-    UNIT_TMP=""
-    res_ok "unit written: $UNIT_DIR/voicetype.service"
-
-    systemctl --user daemon-reload || warn "systemd could not reload the units — try: systemctl --user daemon-reload"
-    if systemctl --user enable voicetype; then
-        res_ok "the daemon starts automatically at boot"
+    # writing the unit is just a file — it does not need a systemd session
+    if ! mkdir -p "$LIB_DIR" "$UNIT_DIR"; then
+        res_warn "could not create $LIB_DIR or $UNIT_DIR — no unit written"
+        SERVICE_STATE="not installed (the directories could not be created)"
     else
-        res_warn "the unit could not be enabled — run: systemctl --user enable voicetype"
+        # cp + chmod (busybox has no "install")
+        if cp packaging/wait-display "$LIB_DIR/wait-display" 2>/dev/null; then
+            chmod 755 "$LIB_DIR/wait-display" 2>/dev/null || true
+        else
+            res_warn "could not copy packaging/wait-display to $LIB_DIR"
+        fi
+
+        # write the unit atomically: a half-written file would break the daemon
+        unit_tmp="$UNIT_DIR/.voicetype.service.$$"
+        UNIT_TMP="$unit_tmp"
+        if ! sed -e "s#/usr/lib/voicetype/wait-display#$(sed_escape "$LIB_DIR/wait-display")#" \
+            -e "s#/usr/bin/voicetype#$(sed_escape "$PIPX_BIN_DIR/voicetype")#g" \
+            packaging/voicetype.service > "$unit_tmp" 2>/dev/null; then
+            res_warn "could not write the unit — see: $UNIT_DIR/voicetype.service"
+            rm -f "$unit_tmp"
+            UNIT_TMP=""
+        else
+            # the daemon has to read the same config file the installer writes
+            # (systemd splits Environment= on whitespace → the value must be quoted)
+            if [ -n "${VOICETYPE_CONFIG:-}" ]; then
+                # the value goes into the file as it is — only the systemd
+                # quoting has to be escaped (a backslash and a quote)
+                unit_env="Environment=\"VOICETYPE_CONFIG=$(systemd_escape "$CONFIG_FILE")\""
+                unit_new="$unit_tmp.new"
+                UNIT_TMP="$unit_new"
+                inserted=0
+                : > "$unit_new" 2>/dev/null || true
+                while IFS= read -r line || [ -n "$line" ]; do
+                    printf '%s\n' "$line" >> "$unit_new" 2>/dev/null || true
+                    case "$line" in
+                        Environment=* | ExecStart=*)
+                            if [ "$inserted" -eq 0 ]; then
+                                printf '%s\n' "$unit_env" >> "$unit_new" 2>/dev/null || true
+                                inserted=1
+                            fi
+                            ;;
+                    esac
+                done < "$unit_tmp"
+                if [ "$inserted" -eq 0 ]; then
+                    printf '%s\n' "$unit_env" >> "$unit_new" 2>/dev/null || true
+                fi
+                if ! mv -f "$unit_new" "$unit_tmp" 2>/dev/null; then
+                    res_warn "could not add the config path to the unit"
+                    rm -f "$unit_new"
+                    UNIT_TMP="$unit_tmp"
+                fi
+            fi
+            chmod 644 "$unit_tmp" 2>/dev/null || true
+            if mv -f "$unit_tmp" "$UNIT_DIR/voicetype.service"; then
+                UNIT_TMP=""
+                UNIT_WRITTEN=1
+                res_ok "unit written: $UNIT_DIR/voicetype.service"
+            else
+                res_warn "could not write $UNIT_DIR/voicetype.service"
+            fi
+        fi
     fi
-    check_add "ok" "systemd user unit" "$UNIT_DIR/voicetype.service"
+
+    if [ "$UNIT_WRITTEN" -eq 1 ]; then
+        if systemd_user_available; then
+            systemctl --user daemon-reload || warn "systemd could not reload the units — try: systemctl --user daemon-reload"
+            if systemctl --user enable voicetype; then
+                SERVICE_ENABLED=1
+                res_ok "the daemon starts automatically at boot"
+            else
+                res_warn "the unit could not be enabled — run: systemctl --user enable voicetype"
+            fi
+        else
+            # the unit is ready, but there is no session to enable it in
+            res_skip "no systemd user session — enable it later with: systemctl --user enable --now voicetype"
+            warn "no systemd user session here — the unit is ready, enable it later with: systemctl --user enable --now voicetype"
+            SERVICE_STATE="not started (no systemd user session)"
+        fi
+        if [ "$SERVICE_ENABLED" -eq 1 ]; then
+            check_add "ok" "systemd user unit" "$UNIT_DIR/voicetype.service"
+        else
+            check_add "warn" "systemd user unit" "$UNIT_DIR/voicetype.service"
+        fi
+    fi
 fi
 
 # ============================================================ 8. daemon
@@ -914,9 +1026,13 @@ step "Daemon"
 # the daemon needs a moment to start and to create its socket — wait for both,
 # so that 'voicetype reload' works right after the installation
 # (the unit waits up to 15 s for a display before it starts)
-DAEMON_WAIT_TRIES="${VOICETYPE_DAEMON_WAIT_TRIES:-60}"
+DAEMON_WAIT_TRIES="${VOICETYPE_DAEMON_WAIT_TRIES:-80}"
+case "$DAEMON_WAIT_TRIES" in
+    '' | *[!0-9]*) DAEMON_WAIT_TRIES=80 ;;
+esac
 wait_for_daemon() {
     local i=0 pid="" sock=""
+    SOCKET_MISSING=0
     while [ "$i" -lt "$DAEMON_WAIT_TRIES" ]; do
         if systemctl --user is-active --quiet voicetype; then
             break
@@ -936,23 +1052,30 @@ wait_for_daemon() {
     sock="$XDG_RUNTIME_DIR/voicetype.sock"
     i=0
     while [ "$i" -lt 20 ]; do
-        [ -S "$sock" ] && return 0
+        if [ -S "$sock" ]; then
+            return 0
+        fi
         i=$((i + 1))
         sleep 0.25
     done
+    # the daemon runs, but the socket is somewhere else — the CLI may not
+    # reach it (this is only a hint, the daemon itself is fine)
+    SOCKET_MISSING=1
     return 0
 }
 
 # does the user manager know a display? (the daemon needs one for the overlay)
 user_manager_has_display() {
-    systemctl --user show-environment 2>/dev/null | grep -qE '^(WAYLAND_DISPLAY|DISPLAY)=.+'
+    local env_dump
+    env_dump="$(systemctl --user show-environment 2>/dev/null || true)"
+    printf '%s' "$env_dump" | grep -qE '^(WAYLAND_DISPLAY|DISPLAY)=.+'
 }
 
 if [ "$DO_SERVICE" -eq 0 ]; then
     res_skip "skipped (--no-service)"
 elif ! systemd_user_available; then
     res_skip "no systemd user session — start the daemon later with: systemctl --user enable --now voicetype"
-elif [ ! -f "$UNIT_DIR/voicetype.service" ]; then
+elif [ "$UNIT_WRITTEN" -eq 0 ]; then
     res_skip "no unit was written — nothing to start"
 else
     DAEMON_ACTION="started"
@@ -973,14 +1096,27 @@ else
     fi
 
     if wait_for_daemon; then
-        res_ok "the daemon is running"
         case "$DAEMON_ACTION" in
-            restarted) SERVICE_STATE="enabled and restarted (the new code is running)" ;;
-            restart-failed) SERVICE_STATE="running, but the restart failed — see: journalctl --user -u voicetype" ;;
-            start-failed) SERVICE_STATE="enabled, but the start failed — see: journalctl --user -u voicetype" ;;
-            *) SERVICE_STATE="enabled and started" ;;
+            restarted)
+                res_ok "the daemon is running (with the new code)"
+                SERVICE_STATE="enabled and restarted (the new code is running)"
+                check_add "ok" "the daemon" "running" ;;
+            restart-failed)
+                res_warn "the daemon still runs, but the restart failed — the old code is still active"
+                SERVICE_STATE="running, but the restart failed — see: journalctl --user -u voicetype"
+                check_add "warn" "the daemon" "restart failed" ;;
+            start-failed)
+                res_warn "the daemon is running, but the start failed"
+                SERVICE_STATE="enabled, but the start failed — see: journalctl --user -u voicetype"
+                check_add "warn" "the daemon" "start failed" ;;
+            *)
+                res_ok "the daemon is running"
+                SERVICE_STATE="enabled and started"
+                check_add "ok" "the daemon" "running" ;;
         esac
-        check_add "ok" "the daemon" "running"
+        if [ "$SOCKET_MISSING" -eq 1 ]; then
+            res_info "the socket is not in $XDG_RUNTIME_DIR — 'voicetype reload' may not reach the daemon"
+        fi
     else
         res_warn "the daemon does not answer — see: journalctl --user -u voicetype -n 20"
         if ! user_manager_has_display; then
@@ -1029,7 +1165,7 @@ else
 fi
 
 if [ "$DO_SERVICE" -eq 1 ] && [ -f "$UNIT_DIR/voicetype.service" ]; then
-    unit_exec="$(sed -n 's#^ExecStart=##p' "$UNIT_DIR/voicetype.service" | head -n1)"
+    unit_exec="$(sed -n 's#^ExecStart=##p' "$UNIT_DIR/voicetype.service" 2>/dev/null | head -n1 || true)"
     unit_bin="${unit_exec%% *}"
     if [ -x "$unit_bin" ]; then
         res_ok "the unit points at a working binary"

@@ -6,6 +6,7 @@ real user home is never touched.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -170,7 +171,8 @@ def env(tmp_path):
     home = tmp_path / "home"
     state = tmp_path / "state"
     bindir = tmp_path / "bin"
-    for d in (home, state, bindir):
+    runtime = tmp_path / "run"
+    for d in (home, state, bindir, runtime):
         d.mkdir(parents=True, exist_ok=True)
     _write_stub(bindir / "pipx", PIPX_STUB)
     _write_stub(bindir / "systemctl", SYSTEMCTL_STUB)
@@ -180,7 +182,7 @@ def env(tmp_path):
         PATH=f"{bindir}:{e['PATH']}",
         STUB_STATE=str(state),
         XDG_CONFIG_HOME=str(home / ".config"),
-        XDG_RUNTIME_DIR=str(tmp_path / "run"),
+        XDG_RUNTIME_DIR=str(runtime),
     )
     e.pop("XDG_SESSION_TYPE", None)
     return e, state, home
@@ -691,3 +693,84 @@ def test_a_working_config_is_checked_off(env):
     r = _run(e, "--no-hotkey")
     assert r.returncode == 0, r.stderr
     assert "[✓] configuration file" in r.stdout
+
+
+# --------------------------------------------------------------------------
+# the defects an independent review found
+# --------------------------------------------------------------------------
+
+
+def test_the_unit_is_written_even_without_a_systemd_session(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    e["STUB_NO_BUS"] = "1"
+    r = _run(e, "--no-hotkey")
+    assert r.returncode == 0, r.stderr
+    # writing a file needs no systemd session — only starting the daemon does
+    unit = home / ".config" / "systemd" / "user" / "voicetype.service"
+    assert unit.exists()
+    assert "ExecStart=" in unit.read_text(encoding="utf-8")
+    # ... but without a session nothing is enabled or started
+    assert "enable --now voicetype" not in _log(state, "systemctl.log")
+    assert "enable voicetype" not in _log(state, "systemctl.log")
+
+
+def test_the_reported_backup_is_the_one_of_this_run(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    cfg = home / ".config" / "voicetype" / "config.toml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    # an old backup with a far future timestamp must not be reported
+    (cfg.parent / "config.toml.bak-99990101-000000").write_text("old", encoding="utf-8")
+    cfg.write_text("this is = not toml [", encoding="utf-8")
+    r = _run(e, "--no-hotkey")
+    assert r.returncode == 0, r.stderr
+    assert "bak-99990101-000000" not in r.stdout
+    assert "backed up as" in r.stdout
+
+
+def test_a_failed_restart_is_not_checked_off(env):
+    e, state, home = env
+    _pipx_json(state)
+    _existing_install(state)
+    e["STUB_ACTIVE"] = "1"  # the daemon runs ...
+    e["STUB_NO_START"] = "1"  # ... but the restart fails
+    e["VOICETYPE_DAEMON_WAIT_TRIES"] = "4"
+    r = _run(e, "--no-hotkey")
+    assert r.returncode == 0, r.stderr
+    assert "the daemon could not be restarted" in r.stdout
+    # the checklist must not show a green tick for a daemon that did not restart
+    assert "[!] the daemon" in r.stdout
+    assert "restart failed" in r.stdout
+    assert "→ running" not in r.stdout
+
+
+def test_a_config_of_another_user_does_not_abort_the_install(env):
+    e, state, home = env
+    _pipx_json(state, installed=False)
+    # "~root/..." is expanded by the app, but the file is not writable
+    e["VOICETYPE_CONFIG"] = "~root/voicetype.toml"
+    r = _run(e, "--no-hotkey")
+    assert r.returncode == 0, r.stderr
+    assert "VoiceType is installed." in r.stdout
+    assert "could not create the config" in r.stdout
+
+
+def test_the_audio_tools_package_is_mapped_per_distribution():
+    text = SCRIPT.read_text(encoding="utf-8")
+    match = re.search(r"REQUIREMENTS='(.*?)'", text, re.S)
+    assert match, "the package table is missing"
+    columns = {}
+    for line in match.group(1).splitlines():
+        role, _tool, *pkgs = line.split("|")
+        columns[role] = pkgs
+    # the pw-* tools live in their own package on most distributions
+    assert columns["audio tools"] == [
+        "pipewire-audio",  # arch
+        "pipewire-bin",  # debian
+        "pipewire-utils",  # fedora
+        "pipewire-tools",  # suse
+        "pipewire-tools",  # alpine
+        "pipewire",  # void
+    ]
+
