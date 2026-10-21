@@ -95,6 +95,13 @@ class OverlayConfig:
     show_partial_text: bool = True
     show_audio_meter: bool = True
     font: str = "Vazirmatn, Noto Sans Arabic, Sans"
+    style: str = "pill"  # pill | waveform | vu_meter
+    animations: bool = True  # master switch for the animated transitions
+    show_transcript: bool = True  # live word-by-word transcript above the pill
+    transcript_words: int = 4  # how many words the live preview keeps
+    accent: str = ""  # hex override for the accent colour; "" = palette default
+    fade_ms: int = 140  # show/hide fade duration in milliseconds
+    sounds: bool = False  # audible start/stop/error cues
 
 
 @dataclass(frozen=True)
@@ -141,18 +148,42 @@ class Config:
 
 # ---------------------------------------------------------------- validation
 PROVIDERS = ("google_free", "google_cloud", "vosk", "whisper")
+
+#: Palettes accepted by ``overlay.theme``.  The list mirrors
+#: ``voicetype.ui.theme.PALETTE_NAMES``; the core must not import the UI
+#: package, so the names are repeated here and the test suite keeps the two
+#: lists in sync.
+THEME_NAMES = (
+    "catppuccin-mocha",
+    "dracula",
+    "gruvbox-dark",
+    "nord",
+    "rose-pine",
+    "tokyo-night",
+    "tokyo-night-light",
+)
+
+#: Pre-1.0 ``overlay.theme`` values, still accepted for existing config files.
+LEGACY_THEME_NAMES = ("dark", "light")
+
+#: ``overlay.accent`` is either empty (the palette decides) or a hex colour.
+_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+
 _ENUMS: dict[str, tuple[str, ...]] = {
     "hotkey.toggle_mode": ("press", "hold"),
     "stt.provider": PROVIDERS,
     "stt.whisper.device": ("cpu", "cuda"),
     "overlay.position": ("top", "center", "bottom"),
     "overlay.anchor_horizontal": ("left", "center", "right"),
-    "overlay.theme": ("light", "dark"),
+    "overlay.theme": LEGACY_THEME_NAMES + THEME_NAMES,
+    "overlay.style": ("pill", "waveform", "vu_meter"),
     "injector.backend": ("auto", "paste", "wtype", "ydotool", "xdotool"),
     "injector.paste_shortcut": ("auto", "ctrl+v", "ctrl+shift+v"),
     "postprocess.digits": ("keep", "latin", "persian"),
     "log_level": ("DEBUG", "INFO", "WARNING", "ERROR"),
 }
+#: Palette names are matched case-insensitively, like the theme resolver.
+_THEME_NAMES_LOWER = {name.lower() for name in _ENUMS["overlay.theme"]}
 _WHISPER_MODELS = ("tiny", "base", "small", "medium", "large", "large-v2", "large-v3")
 _RANGES: dict[str, tuple[float, float]] = {
     "stt.silence_threshold_seconds": (0.5, 30.0),
@@ -168,12 +199,36 @@ _RANGES: dict[str, tuple[float, float]] = {
     "overlay.opacity": (0.0, 1.0),
     "overlay.width": (120, 1920),
     "overlay.height": (48, 480),
+    "overlay.fade_ms": (0, 1000),
+    "overlay.transcript_words": (1, 12),
     "injector.typing_delay_ms": (0, 50),
 }
 
 
 def _fail(path: str, msg: str) -> ConfigError:
     return ConfigError(f"config: '{path}' {msg}")
+
+
+def _is_theme_path(value: str) -> bool:
+    """True when an ``overlay.theme`` value points at a file instead of naming a palette."""
+    return value.lower().endswith(".css") or "/" in value or "~" in value
+
+
+def _check_theme_path(path: str, value: str) -> None:
+    """A theme file must exist: a missing file is a config error, not a silent fallback."""
+    candidate = Path(value).expanduser()
+    if not candidate.is_file():
+        raise _fail(path, f"theme file not found: {candidate}")
+    if candidate.suffix.lower() != ".css":
+        raise _fail(path, f"must be a .css file (got {value!r})")
+
+
+def _check_accent(path: str, value: str) -> None:
+    """``overlay.accent`` is empty (the palette decides) or a hex colour."""
+    if not value:
+        return
+    if not _HEX_COLOR_RE.match(value):
+        raise _fail(path, f"must be empty or a hex colour like '#7aa2f7' (got {value!r})")
 
 
 def _build(cls: type, data: dict[str, Any], prefix: str):
@@ -218,6 +273,17 @@ def _build(cls: type, data: dict[str, Any], prefix: str):
             if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
                 raise _fail(path, "must be a list of strings")
             value = tuple(value)
+        if path == "overlay.theme":
+            # a theme is either a palette name (case-insensitive, like the
+            # resolver in voicetype.ui.theme) or a path to a CSS file
+            if _is_theme_path(value):
+                _check_theme_path(path, value)
+            elif value.strip().lower() not in _THEME_NAMES_LOWER:
+                raise _fail(path, f"must be one of {', '.join(_ENUMS[path])} (got {value!r})")
+            kwargs[name] = value
+            continue
+        if path == "overlay.accent":
+            _check_accent(path, value)
         if path in _ENUMS and value not in _ENUMS[path]:
             raise _fail(path, f"must be one of {', '.join(_ENUMS[path])} (got {value!r})")
         if path in _RANGES:
@@ -348,12 +414,20 @@ position = "top"
 anchor_horizontal = "center"
 offset_x = 0
 offset_y = 12
-theme = "dark"
+theme = "dark"             # palette name (tokyo-night, nord, …), legacy dark/light, or a .css path
 opacity = 0.86
 width = 360
 height = 96
 show_partial_text = true
 show_audio_meter = true
+font = "Vazirmatn, Noto Sans Arabic, Sans"
+style = "pill"             # pill | waveform | vu_meter
+animations = true          # master switch for the animated transitions
+show_transcript = true     # live word-by-word transcript above the pill
+transcript_words = 4       # how many words the live preview keeps
+accent = ""                # hex accent override, e.g. "#7aa2f7"; "" = palette default
+fade_ms = 140              # show/hide fade duration in milliseconds
+sounds = false             # audible start/stop/error cues
 
 [injector]
 backend = "auto"           # auto | paste | wtype | ydotool | xdotool

@@ -12,7 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from .audio import SAMPLE_RATE, SAMPLE_WIDTH, AudioError, rms_level, save_wav
 from .config import Config
@@ -32,6 +32,7 @@ from .stt.segmenting import SegmentedStream
 log = get_logger("dispatcher")
 
 ERROR_DISPLAY_SECONDS = 2.0
+SUCCESS_DISPLAY_SECONDS = 1.2
 
 
 class State(enum.Enum):
@@ -41,6 +42,7 @@ class State(enum.Enum):
     INJECTING = "injecting"
 
 
+@runtime_checkable
 class Overlay(Protocol):
     def show_listening(self) -> None: ...
     def set_partial(self, text: str) -> None: ...
@@ -48,6 +50,7 @@ class Overlay(Protocol):
     def show_processing(self) -> None: ...
     def show_error(self, message: str) -> None: ...
     def show_warning(self, message: str) -> None: ...
+    def show_success(self, text: str = "") -> None: ...
     def hide(self) -> None: ...
 
 
@@ -60,6 +63,7 @@ class NullOverlay:
     def show_processing(self) -> None: ...
     def show_error(self, message: str) -> None: ...
     def show_warning(self, message: str) -> None: ...
+    def show_success(self, text: str = "") -> None: ...
     def hide(self) -> None: ...
 
 
@@ -81,6 +85,7 @@ class Dispatcher:
         overlay: Overlay | None = None,
         build: Callable[[Config], Components] | None = None,
         error_display_seconds: float = ERROR_DISPLAY_SECONDS,
+        success_display_seconds: float = SUCCESS_DISPLAY_SECONDS,
         media: Any = None,
         notifier: Any = None,
     ) -> None:
@@ -91,6 +96,7 @@ class Dispatcher:
         self._media = media
         self._notifier = notifier
         self._error_display = error_display_seconds
+        self._success_display = success_display_seconds
         self._lock = threading.RLock()
         self._state = State.IDLE
         self._session = 0
@@ -343,6 +349,7 @@ class Dispatcher:
                 self._set_state(State.INJECTING, "stt done")
             self.overlay.hide()  # hide first so focus/paint can't interfere with the paste
             self._c.injector.inject(text)
+            self._show_success(session, text)
         except STTCancelled:
             log.info("transcription cancelled")
         except STTError as e:
@@ -390,6 +397,22 @@ class Dispatcher:
                     self.overlay.hide()
 
         timer = threading.Timer(self._error_display, later)
+        timer.daemon = True
+        timer.start()
+
+    def _show_success(self, session: int, text: str) -> None:
+        """Confirm the injection, then hide the overlay again after a short delay."""
+        with self._lock:
+            if session != self._session:
+                return
+            self.overlay.show_success(text)
+
+        def later() -> None:
+            with self._lock:
+                if session == self._session and self._state is State.IDLE:
+                    self.overlay.hide()
+
+        timer = threading.Timer(self._success_display, later)
         timer.daemon = True
         timer.start()
 

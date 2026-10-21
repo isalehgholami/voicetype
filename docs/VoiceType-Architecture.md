@@ -15,6 +15,7 @@
 > | Topic | Original | Now |
 > |---|---|---|
 > | Overlay toolkit | PyQt6 + `voicetype._layershell` shim | **GTK4 + gtk4-layer-shell** — the shim does not exist; no Python binding for LayerShellQt (ADR-0003) |
+> | Overlay packages (Arch) | `qt6-base`, `qt6-declarative`, `qt6-wayland`, `layer-shell-qt`, `python-pyqt6` | **`gtk4`, `gtk4-layer-shell`, `python-gobject`, `python-cairo`** (`packaging/PKGBUILD`; the package list in §9.1 is the original draft) |
 > | Text injection (Wayland) | `wtype` | **clipboard + `ydotool` paste** (Ctrl+Shift+V for terminals), `wtype` fallback — KWin lacks virtual-keyboard (ADR-0002) |
 > | Hotkey | `kglobalaccel` D-Bus / python-xlib | **KDE Custom Shortcut → `voicetype toggle`**; optional evdev for hold mode (ADR-0004) |
 > | External control | `pkill -SIGUSR1 -f ...` | **Unix socket** `$XDG_RUNTIME_DIR/voicetype.sock`, mode 0600 |
@@ -68,7 +69,7 @@ The remainder of this document walks through the target environment, surveys and
 The application must satisfy the following use cases end-to-end. Each is described from the user's perspective so that subsequent sections can be validated against it.
 
 - **G1 — Global hotkey activation.** The user can press a configurable key combination (default: `Super+Alt+V`) from anywhere on the desktop — regardless of which window is focused — and the application transitions from idle to "listening" within 500 ms.
-- **G2 — Microphone overlay.** While listening, a small floating overlay appears (default: top-center of the screen, 320×96 px) showing a real-time audio level meter and a status label ("Listening…"). The overlay is always-on-top, click-through, and respects Plasma 6's layer-shell protocol so it does not steal focus.
+- **G2 — Microphone overlay.** While listening, a small floating overlay appears (default: top-center of the screen, 360×96 px) showing a real-time audio level meter and a status label ("Listening…"). The overlay is always-on-top, click-through, and respects Plasma 6's layer-shell protocol so it does not steal focus.
 - **G3 — Persian-primary STT with English term handling.** The default recognition language is Persian (`fa-IR`) but the engine must correctly transcribe common English technical terms (e.g. "Linux", "Python", "Qt", "Wayland") embedded in Persian speech — exactly how GBoard does it.
 - **G4 — Cursor-position text injection.** The transcribed text is typed at the currently focused cursor position using a virtual keyboard protocol — `wtype` on Wayland, `xdotool` on X11 — so the text appears wherever the user was typing, with no clipboard pollution and no window-switching side effects.
 - **G5 — Stop conditions.** Listening stops when (a) the user presses the hotkey again (toggle mode), (b) the user presses `Escape`, or (c) the engine detects `N` consecutive seconds of silence (configurable, default 3 s). On stop, the overlay disappears within 300 ms.
@@ -490,7 +491,7 @@ class Config:
     language: str                    # "fa-IR"
     overlay_position: str            # "top" | "center" | "bottom"
     overlay_offset_y: int            # pixels from anchor
-    overlay_theme: str               # "light" | "dark"
+    overlay_theme: str               # palette name | legacy "light"/"dark" | .css path
     overlay_opacity: float           # 0.0–1.0
     silence_threshold_seconds: float # 3.0
     auto_punctuate: bool             # True
@@ -996,8 +997,9 @@ keyfile = ""                      # path to service-account JSON
 [overlay]
 position = "top"                  # top | center | bottom
 offset_y = 12                     # pixels from anchor
-theme = "dark"                    # light | dark
+theme = "dark"                    # palette name (tokyo-night, nord, …), light | dark, or a .css path
 opacity = 0.86                    # 0.0–1.0
+style = "pill"                    # pill | waveform | vu_meter
 
 [injector]
 backend = "auto"                  # auto | wtype | xdotool
@@ -1259,13 +1261,22 @@ After changing the combo, run `systemctl --user reload voicetype.service` AND re
 | `[overlay] position` | `"top"` | `top` / `center` / `bottom` | Vertical anchor for the layer-shell surface. |
 | `[overlay] anchor_horizontal` | `"center"` | `left` / `center` / `right` | Horizontal anchor. |
 | `[overlay] offset_x` | `0` | `-1920`–`1920` (px) | Fine-tune horizontal position relative to anchor. |
-| `[overlay] offset_y` | `12` | `0`–`1080` (px) | Fine-tune vertical position. |
-| `[overlay] theme` | `"dark"` | `light` / `dark` | Background color and text color preset. |
-| `[overlay] opacity` | `0.86` | `0.0`–`1.0` | Background opacity of the overlay card. 0.0 = invisible, 1.0 = solid. |
+| `[overlay] offset_y` | `12` | `-1080`–`1080` (px) | Fine-tune vertical position. |
+| `[overlay] enabled` | `true` | `true` / `false` | Whether the overlay window is opened at all. With it off the daemon runs without one. |
+| `[overlay] theme` | `"dark"` | `tokyo-night` / `tokyo-night-light` / `catppuccin-mocha` / `rose-pine` / `nord` / `gruvbox-dark` / `dracula`, the legacy `light` / `dark`, or a path to a `.css` file | Palette for background, text and accent colours. A CSS file uses GTK's `@define-color` syntax (`background-color`, `border-color`, `text-color`, `accent-color`, …). When the value is a `.css` file it is watched, so editing the file repaints the overlay without a daemon restart. The default `pill` style paints fixed colours, so the palette is only visible in the `waveform` and `vu_meter` styles ([docs/theming.md](theming.md)). |
+| `[overlay] accent` | `""` | `""` or a hex colour (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) | Overrides the palette's accent colour. Empty = use the palette accent. The accent slot is carried in the palette but not painted on its own yet. |
+| `[overlay] opacity` | `0.86` | `0.0`–`1.0` | Scales the opacity of the card the visualization is drawn on: the factor multiplies the alpha of the palette's background colour (the waveform and VU-meter panel) and the pill's own body. 0.0 = invisible, 1.0 = the palette's own opacity. |
 | `[overlay] width` | `360` | `120`–`1920` (px) | Overlay width. |
 | `[overlay] height` | `96` | `48`–`480` (px) | Overlay height. |
-| `[overlay] show_partial_text` | `true` | `true` / `false` | If true, shows the live partial transcription under the status label (streaming providers only). |
-| `[overlay] show_audio_meter` | `true` | `true` / `false` | If true, shows the green/blue level meter bar. |
+| `[overlay] font` | `"Vazirmatn, Noto Sans Arabic, Sans"` | Any family list Pango understands | Font family for the status label and the live transcript. |
+| `[overlay] show_partial_text` | `true` | `true` / `false` | If true, the live partial transcription is fed to the overlay and shown above the pill (streaming providers only). Needs `show_transcript` on as well. |
+| `[overlay] show_audio_meter` | `true` | `true` / `false` | If true, the visualization reacts to the microphone (the bars follow the level). If false, the level is treated as silence and the bars stay flat. |
+| `[overlay] style` | `"pill"` | `pill` / `waveform` / `vu_meter` | Which visualization the overlay draws. |
+| `[overlay] animations` | `true` | `true` / `false` | Master switch for motion. With it off the overlay appears and disappears instantly (`fade_ms` is ignored), the state envelopes freeze (no breathing, strobing or pulsing) and the transcript words appear without animating. |
+| `[overlay] show_transcript` | `true` | `true` / `false` | Shows the word-by-word live transcript above the pill. |
+| `[overlay] transcript_words` | `4` | `1`–`12` | How many words the live preview keeps. |
+| `[overlay] fade_ms` | `140` | `0`–`1000` (ms) | Show/hide fade duration. |
+| `[overlay] sounds` | `false` | `true` / `false` | Audible start/stop/error cues. The tones are synthesised with the standard library and played with `pw-play`, `paplay`, `aplay` or `ffplay`; with no player installed the cue is silently dropped. |
 
 **Example — Bottom-right corner overlay, light theme, no partial text:**
 

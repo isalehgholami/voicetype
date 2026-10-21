@@ -23,7 +23,7 @@ browser, Telegram, terminal, IDE, LibreOffice.
 - **Persian-first dictation** with correct half-spaces (ZWNJ), Persian punctuation and digits.
 - **Mixed Persian + English** — technical terms are normalised: «پایتون» → `Python`, «گیت‌هاب» → `GitHub` (40+ terms, extensible).
 - **Works in any app** — text is injected at the cursor via clipboard paste (Wayland: `wl-copy` + `ydotool`; X11: `xdotool`). Your previous clipboard is restored.
-- **Floating overlay** (GTK4 + layer-shell): live audio level, status and partial text. Never steals focus, click-through.
+- **Floating overlay** (GTK4 + layer-shell): never steals focus, click-through. Three styles (`pill`, `waveform`, `vu_meter`), animated states (recording / paused / processing / error / success) and a live word-by-word transcript preview. Themed with a built-in palette or your own CSS file ([theming](docs/theming.md)).
 - **Multiple speech engines** — Google (free), Vosk (offline, streaming), Whisper (offline, most accurate), Google Cloud. Automatic fallback after repeated failures.
 - **Smart stop** — adaptive silence detection that calibrates to your room noise, or stop it yourself.
 - **Hardened** — the control socket is `0600`, transcribed text is never executed, control characters are stripped.
@@ -163,8 +163,16 @@ fallback_provider = "vosk"      # used after 3 consecutive failures
 
 [overlay]
 position = "top"                # top | center | bottom
-theme = "dark"                  # dark | light
-opacity = 0.86
+style = "pill"                  # pill | waveform | vu_meter
+theme = "tokyo-night"           # palette name, "dark"/"light", or the path to a .css file
+accent = ""                     # e.g. "#ff8800" — overrides the palette's accent colour
+opacity = 0.86                  # opacity of the card the overlay draws on (0.0–1.0)
+animations = true               # master switch for motion: false = instant, no pulsing
+show_audio_meter = true         # false = the visualization ignores the microphone
+show_transcript = true          # live word-by-word transcript above the overlay
+transcript_words = 4            # how many words stay on screen (1–12)
+fade_ms = 140                   # length of the show/hide transition
+sounds = false                  # audible cue when recording starts, stops or fails
 
 [injector]
 backend = "auto"                # auto | paste | wtype | ydotool | xdotool
@@ -183,7 +191,9 @@ digits = "keep"                 # keep | latin | persian
 "re:\\bqt\\d\\b" = "Qt"         # keys starting with re: are regular expressions
 ```
 
-Overlay and hold-mode hotkey changes need a daemon restart; everything else applies on `reload`. Details: [docs/postprocess.md](docs/postprocess.md).
+For palettes and custom themes: [docs/theming.md](docs/theming.md). The default `pill` style paints fixed colours, so the palette is only visible in the `waveform` and `vu_meter` styles.
+
+Overlay and hold-mode hotkey changes need a daemon restart; everything else applies on `reload`. The one exception is the theme *file*: when `overlay.theme` points at a `.css` file, editing it repaints the overlay right away ([theming](docs/theming.md)).
 
 ## 🗣️ Speech providers
 
@@ -281,7 +291,7 @@ More: [docs/troubleshooting.md](docs/troubleshooting.md) · [docs/known-issues.m
 
 ## 🗺️ Documentation
 
-[Architecture](docs/VoiceType-Architecture.md) (read the errata first) · [Decisions (ADRs)](docs/adr/) · [Post-processing](docs/postprocess.md) · [Network & proxy](docs/network.md) · [Privacy](docs/privacy.md) · [Injection matrix](docs/inject-matrix.md) · [Benchmarks](docs/benchmarks.md)
+[Architecture](docs/VoiceType-Architecture.md) (read the errata first) · [Decisions (ADRs)](docs/adr/) · [Theming](docs/theming.md) · [Post-processing](docs/postprocess.md) · [Network & proxy](docs/network.md) · [Privacy](docs/privacy.md) · [Injection matrix](docs/inject-matrix.md) · [Benchmarks](docs/benchmarks.md)
 
 ## 🙏 Credits
 

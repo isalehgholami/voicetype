@@ -116,7 +116,10 @@ def test_full_cycle():
     assert d.stop() == "ok transcribing"
     assert d.wait_idle()
     assert inj.texts == ["سلام دنیا"] and backend.calls == [5 * 3200]
-    assert ov.names()[0] == "show_listening" and "show_processing" in ov.names() and ov.names()[-1] == "hide"
+    names = ov.names()
+    assert names[0] == "show_listening" and "show_processing" in names
+    # the overlay is hidden before the paste, then confirms the injection
+    assert names.index("hide") < names.index("show_success")
     assert any(e[0] == "set_audio_level" for e in ov.events)
 
 
