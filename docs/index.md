@@ -21,7 +21,9 @@ Without `--system-deps` it stays root-free and prints the commands you would hav
 
 ## Guides
 
-- [Quick start & commands](../README.md)
+- [Overview & quick start](../README.md)
+- [Installation](installation.md) · [Configuration reference](configuration.md)
+- [Translation](translation.md) · [Theming](theming.md)
 - [Troubleshooting](troubleshooting.md)
 - [Theming](theming.md) · [Compatibility](compatibility.md) · [Injection matrix](inject-matrix.md) · [Known issues](known-issues.md)
 - [Post-processing (Persian)](postprocess.md) · [Translation](translation.md) · [Privacy](privacy.md) · [Benchmarks](benchmarks.md)
