@@ -24,7 +24,7 @@ Typing all day on Linux wears you out, and it got worse once we started working 
 
 When we talk about code, English words end up in the middle of Persian sentences. So VoiceType turns «پایتون» into `Python` and «گیت‌هاب» into `GitHub` on its own. And when the prompt needs to be in English anyway, one line in the config makes it translate what you said before it types.
 
-The two of us wrote it together.
+We wrote it in collaboration with [MdRezaV](https://github.com/MdRezaV) on GitHub.
 
 ## What you get
 
