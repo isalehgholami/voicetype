@@ -20,7 +20,7 @@ jobs:
       - name: Install system libraries
         run: sudo apt-get update && sudo apt-get install -y libportaudio2
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,translate]"
       - name: Lint
         run: ruff check voicetype tests scripts spikes
       - name: Test

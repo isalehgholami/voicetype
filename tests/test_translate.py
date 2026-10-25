@@ -542,6 +542,7 @@ def test_build_translator_prefers_the_fallback_chain(monkeypatch):
 
 
 def test_build_translator_falls_back_to_googletrans(monkeypatch):
+    pytest.importorskip("googletrans", reason="the translate extra is not installed")
     monkeypatch.setattr("voicetype.translate.services_available", lambda: False)
     translator = build_translator(TranslateConfig(enabled=True))
     try:

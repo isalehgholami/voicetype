@@ -268,7 +268,7 @@ def test_a_right_to_left_text_is_aligned_with_the_start_of_its_paragraph():
     automatic, and the direction follows the text — so one answer covers
     both directions.  With RIGHT a Persian text would hug the wrong edge.
     """
-    import gi
+    gi = pytest.importorskip("gi", reason="PyGObject (GTK) is not installed")
 
     gi.require_version("Pango", "1.0")
     from gi.repository import Pango
@@ -281,7 +281,7 @@ def test_a_right_to_left_text_is_aligned_with_the_start_of_its_paragraph():
 
 def test_the_wrapped_layout_follows_the_direction_of_its_own_text():
     """The layout's direction is automatic, so the text decides it."""
-    import gi
+    gi = pytest.importorskip("gi", reason="PyGObject (GTK) is not installed")
 
     gi.require_version("Pango", "1.0")
     gi.require_version("PangoCairo", "1.0")
@@ -310,7 +310,7 @@ def test_the_text_is_not_cut_short_by_the_layout():
     A layout that stopped at the last line would swallow the text that the
     box is supposed to scroll to.
     """
-    import gi
+    gi = pytest.importorskip("gi", reason="PyGObject (GTK) is not installed")
 
     gi.require_version("Pango", "1.0")
     gi.require_version("PangoCairo", "1.0")
@@ -342,7 +342,7 @@ def _paintable_overlay():
     The real drawing code is used: only the parts the painting touches are
     filled in, the constructor needs a display the test machine has not.
     """
-    import gi
+    gi = pytest.importorskip("gi", reason="PyGObject (GTK) is not installed")
 
     gi.require_version("Pango", "1.0")
     gi.require_version("PangoCairo", "1.0")
